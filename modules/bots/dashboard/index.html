@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bot Players</title>
+<style>
+:root {
+  --bg: #f6f5f2;
+  --surface: #ffffff;
+  --surface-2: #f0eee9;
+  --border: #e2dfd8;
+  --text: #22201c;
+  --muted: #6d6a63;
+  --accent: #2f6f5e;
+  --accent-text: #ffffff;
+  --danger: #b0413e;
+  --ok: #2f7d4a;
+  --warn: #a8661a;
+  --hp: #c2584f;
+  --mp: #4a72b5;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161614;
+    --surface: #1f1f1c;
+    --surface-2: #282824;
+    --border: #34332e;
+    --text: #ece9e2;
+    --muted: #9c988f;
+    --accent: #5fb39a;
+    --accent-text: #0f1a16;
+    --danger: #e0716c;
+    --ok: #6cc28b;
+    --warn: #e0a457;
+    --hp: #e07a70;
+    --mp: #7ea2e0;
+    --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+header {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--surface);
+}
+header h1 { font-size: 18px; margin: 0; font-weight: 650; }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: 999px; font-size: 12px;
+  background: var(--surface-2); color: var(--muted);
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.dot.on { background: var(--ok); }
+.dot.off { background: var(--danger); }
+.spacer { flex: 1; }
+main {
+  display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 20px; padding: 20px 24px; max-width: 1400px; margin: 0 auto;
+}
+@media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 16px; } header { padding: 14px 16px; } }
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
+}
+.card h2 {
+  font-size: 13px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+}
+.card .body { padding: 16px; }
+.stack { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 10px 16px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th { font-size: 12px; color: var(--muted); font-weight: 600; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--surface-2); }
+tbody tr.selected { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+tr:last-child td { border-bottom: 0; }
+.table-wrap { overflow-x: auto; }
+.empty { padding: 28px 16px; color: var(--muted); text-align: center; }
+.name { font-weight: 600; }
+.sub { color: var(--muted); font-size: 12px; }
+button, .btn {
+  font: inherit; border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  padding: 7px 12px; border-radius: 8px; cursor: pointer;
+}
+button:hover { border-color: var(--muted); }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+button.danger { color: var(--danger); }
+button:disabled { opacity: .5; cursor: default; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; }
+@media (max-width: 520px) { form { grid-template-columns: 1fr; } }
+label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+label.full, .full { grid-column: 1 / -1; }
+label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); font-size: 14px; }
+input, select {
+  font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; min-width: 0;
+}
+.coords { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.bars { display: flex; flex-direction: column; gap: 6px; min-width: 120px; }
+.bar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.bar > span { display: block; height: 100%; }
+.bar.hp > span { background: var(--hp); }
+.bar.mp > span { background: var(--mp); }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; }
+.slot { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-bottom: 1px dashed var(--border); }
+.slot .k { color: var(--muted); }
+.slot .v.none { color: var(--muted); opacity: .6; }
+.tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
+.tag.ok { color: var(--ok); }
+.tag.failed { color: var(--danger); }
+.tag.pending { color: var(--warn); }
+.section-title { font-size: 12px; color: var(--muted); margin: 18px 0 8px; text-transform: uppercase; letter-spacing: .05em; }
+.msg { margin-top: 12px; font-size: 13px; }
+.msg.err { color: var(--danger); }
+.msg.ok { color: var(--ok); }
+.hidden { display: none !important; }
+.log td { font-size: 13px; }
+.log td.result { white-space: normal; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Bot Players</h1>
+  <span class="pill" id="server-pill"><span class="dot" id="server-dot"></span><span id="server-text">Checking map server…</span></span>
+  <span class="pill hidden" id="pending-pill"></span>
+  <span class="spacer"></span>
+  <button class="primary" id="new-bot-btn">New bot</button>
+</header>
+
+<main>
+  <div class="stack">
+    <section class="card">
+      <h2>Bots</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Job</th><th>Zone</th><th>Status</th><th>HP / MP</th></tr></thead>
+          <tbody id="bot-rows"></tbody>
+        </table>
+      </div>
+      <div class="empty hidden" id="bots-empty">No bots yet. Create one with “New bot”.</div>
+    </section>
+
+    <section class="card">
+      <h2>Recent commands</h2>
+      <div class="table-wrap">
+        <table class="log">
+          <thead><tr><th>Time</th><th>Command</th><th>Bot</th><th>Status</th><th>Result</th></tr></thead>
+          <tbody id="command-rows"></tbody>
+        </table>
+      </div>
+      <div class="empty hidden" id="commands-empty">Nothing queued yet.</div>
+    </section>
+  </div>
+
+  <div class="stack">
+    <section class="card hidden" id="create-card">
+      <h2>New bot</h2>
+      <div class="body">
+        <form id="create-form">
+          <label class="full">Name <input name="name" required maxlength="15" autocomplete="off" placeholder="Letters only, 3-15"></label>
+          <label>Race
+            <select name="race" id="race"></select>
+          </label>
+          <label>Face
+            <select name="face" id="face"></select>
+          </label>
+          <label>Size
+            <select name="size">
+              <option value="0">Small</option><option value="1">Medium</option><option value="2">Large</option>
+            </select>
+          </label>
+          <label>Job
+            <select name="job">
+              <option value="1">Warrior</option><option value="2">Monk</option><option value="3" selected>White Mage</option>
+              <option value="4">Black Mage</option><option value="5">Red Mage</option><option value="6">Thief</option>
+            </select>
+          </label>
+          <label>Level <input name="level" type="number" min="1" max="99" value="1"></label>
+          <label>Nation
+            <select name="nation">
+              <option value="">Race's home nation</option>
+              <option value="0">San d'Oria</option><option value="1">Bastok</option><option value="2">Windurst</option>
+            </select>
+          </label>
+          <label class="full">Spawn
+            <select name="placement" id="placement"></select>
+          </label>
+          <div class="full hidden" id="zone-fields">
+            <label>Zone <select name="zone" id="zone"></select></label>
+            <div class="coords" style="margin-top:8px">
+              <label>X <input name="pos_x" type="number" step="0.01" value="0"></label>
+              <label>Y <input name="pos_y" type="number" step="0.01" value="0"></label>
+              <label>Z <input name="pos_z" type="number" step="0.01" value="0"></label>
+            </div>
+          </div>
+          <label class="check full"><input type="checkbox" name="autospawn" checked> Spawn when the server starts</label>
+          <div class="actions full">
+            <button type="submit" class="primary">Create bot</button>
+            <button type="button" id="create-cancel">Cancel</button>
+          </div>
+        </form>
+        <div class="msg" id="create-msg"></div>
+      </div>
+    </section>
+
+    <section class="card" id="detail-card">
+      <h2 id="detail-title">Details</h2>
+      <div class="body" id="detail-body">
+        <div class="empty">Select a bot to inspect it.</div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+const RACES = { 1: 'Hume (M)', 2: 'Hume (F)', 3: 'Elvaan (M)', 4: 'Elvaan (F)', 5: 'Tarutaru (M)', 6: 'Tarutaru (F)', 7: 'Mithra', 8: 'Galka' };
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+let state = { bots: [], players: [], commands: [], server: {} };
+let selected = null;
+let zones = [];
+let detailBusy = false; // a command from the detail panel is running; don't redraw it
+
+async function api(path, body) {
+  const res = await fetch(path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+function pct(a, b) { return b ? Math.max(0, Math.min(100, Math.round(a / b * 100))) : 0; }
+
+function renderServer() {
+  const s = state.server;
+  $('server-dot').className = 'dot ' + (s.online ? 'on' : 'off');
+  $('server-text').textContent = s.online ? 'Map server online' :
+    (s.heartbeat_age == null ? 'Map server has never reported in' : `Map server offline (last seen ${s.heartbeat_age}s ago)`);
+  const pill = $('pending-pill');
+  pill.classList.toggle('hidden', !state.pending);
+  pill.textContent = `${state.pending} command${state.pending === 1 ? '' : 's'} waiting`;
+}
+
+function renderBots() {
+  $('bots-empty').classList.toggle('hidden', state.bots.length > 0);
+  $('bot-rows').innerHTML = state.bots.map((b) => `
+    <tr data-id="${b.charid}" class="${b.charid === selected ? 'selected' : ''}">
+      <td><div class="name">${esc(b.name)}</div><div class="sub">${esc(b.race)}</div></td>
+      <td>${esc(b.job)} ${b.level}</td>
+      <td>${esc(b.zone)}</td>
+      <td><span class="tag ${b.online ? 'ok' : ''}">${b.online ? 'Online' : 'Offline'}</span>
+          ${b.autospawn ? '<div class="sub">autospawn</div>' : ''}</td>
+      <td><div class="bars" title="HP ${b.hp}/${b.max_hp}  MP ${b.mp}/${b.max_mp}">
+        <div class="bar hp"><span style="width:${pct(b.hp, b.max_hp)}%"></span></div>
+        <div class="bar mp"><span style="width:${pct(b.mp, b.max_mp)}%"></span></div>
+      </div></td>
+    </tr>`).join('');
+}
+
+function renderCommands() {
+  $('commands-empty').classList.toggle('hidden', state.commands.length > 0);
+  $('command-rows').innerHTML = state.commands.map((c) => `
+    <tr>
+      <td>${esc(c.created)}</td>
+      <td>${esc(c.command)}</td>
+      <td>${esc(c.name || c.charid || '')}</td>
+      <td><span class="tag ${c.status === 'done' ? 'ok' : c.status}">${esc(c.status)}</span></td>
+      <td class="result">${esc(c.result || '')}</td>
+    </tr>`).join('');
+}
+
+function renderPlacementOptions() {
+  const sel = $('placement');
+  const current = sel.value;
+  const opts = state.players.map((p) => `<option value="player:${p.charid}">Next to ${esc(p.name)} (${esc(p.zone)})</option>`);
+  opts.push('<option value="zone">A zone and position…</option>');
+  sel.innerHTML = opts.join('');
+  if ([...sel.options].some((o) => o.value === current)) sel.value = current;
+  $('zone-fields').classList.toggle('hidden', sel.value !== 'zone');
+}
+
+async function refresh() {
+  try {
+    state = await api('/api/state');
+  } catch (e) {
+    state.server = { online: false, heartbeat_age: null };
+    $('server-text').textContent = 'Dashboard lost the database: ' + e.message;
+    return;
+  }
+  renderServer();
+  renderBots();
+  renderCommands();
+  renderPlacementOptions();
+  if (selected && !detailBusy) loadDetail(selected, false);
+}
+
+async function loadDetail(charid, scroll = true) {
+  let b;
+  try {
+    b = await api(`/api/bots/${charid}`);
+  } catch (e) {
+    selected = null;
+    $('detail-title').textContent = 'Details';
+    $('detail-body').innerHTML = '<div class="empty">That bot no longer exists.</div>';
+    return;
+  }
+  $('detail-title').innerHTML = `${esc(b.name)} <span class="tag ${b.online ? 'ok' : ''}">${b.online ? 'Online' : 'Offline'}</span>`;
+  const playerOpts = state.players.map((p) => `<option value="${p.charid}">${esc(p.name)} (${esc(p.zone)})</option>`).join('');
+  $('detail-body').innerHTML = `
+    <div class="actions">
+      ${b.online ? `<button data-cmd="despawn">Despawn</button>` : `<button class="primary" data-cmd="spawn">Spawn</button>`}
+      ${state.players.length ? `<select id="summon-target">${playerOpts}</select><button data-cmd="summon">Move next to</button>` : ''}
+      <label class="check"><input type="checkbox" id="autospawn-toggle" ${b.autospawn ? 'checked' : ''}> Autospawn</label>
+      <span class="spacer"></span>
+      <button class="danger" data-cmd="delete">Delete</button>
+    </div>
+    <div class="msg" id="detail-msg"></div>
+
+    <div class="section-title">Character</div>
+    <dl>
+      <dt>Race</dt><dd>${esc(b.race)}, face ${esc(b.face)}, ${esc(b.size).toLowerCase()}</dd>
+      <dt>Job</dt><dd>${esc(b.job)} ${b.level}${b.sub_job ? ' / ' + esc(b.sub_job) : ''}</dd>
+      <dt>Nation</dt><dd>${esc(b.nation)}</dd>
+      <dt>Zone</dt><dd>${esc(b.zone)} <span class="sub">(${b.pos.join(', ')})</span></dd>
+      <dt>HP / MP</dt><dd>${b.hp} / ${b.max_hp} &nbsp; ${b.mp} / ${b.max_mp}</dd>
+      <dt>Gil</dt><dd>${b.gil.toLocaleString()}</dd>
+      <dt>Created</dt><dd>${esc(b.created)} <span class="sub">charid ${b.charid}</span></dd>
+    </dl>
+
+    <div class="section-title">Equipment</div>
+    <div class="grid2">
+      ${b.equipment.map((e) => `<div class="slot"><span class="k">${esc(e.slot)}</span><span class="v ${e.item ? '' : 'none'}">${esc(e.item || '—')}</span></div>`).join('')}
+    </div>
+
+    <div class="section-title">Inventory (${b.inventory.length})</div>
+    ${b.inventory.length ? b.inventory.map((i) => `<div class="slot"><span>${esc(i.item)}${i.quantity > 1 ? ' ×' + i.quantity : ''}</span>${i.equipped ? '<span class="tag">equipped</span>' : ''}</div>`).join('') : '<div class="sub">Empty</div>'}
+  `;
+  $('detail-body').querySelectorAll('button[data-cmd]').forEach((btn) => btn.addEventListener('click', () => runDetailCommand(b, btn.dataset.cmd)));
+  $('autospawn-toggle').addEventListener('change', (e) => runDetailCommand(b, 'autospawn', { autospawn: e.target.checked }));
+  if (scroll && window.innerWidth < 900) $('detail-card').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function waitForCommand(id, msgEl) {
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 1200));
+    const c = await api(`/api/commands/${id}`);
+    if (c.status !== 'pending') {
+      msgEl.className = 'msg ' + (c.status === 'done' ? 'ok' : 'err');
+      msgEl.textContent = c.result;
+      refresh();
+      return c;
+    }
+  }
+  msgEl.className = 'msg err';
+  msgEl.textContent = 'Still waiting. Is the map server running? The command stays queued until it is.';
+}
+
+async function runDetailCommand(b, command, extra = {}) {
+  const msg = $('detail-msg');
+  if (command === 'delete' && !confirm(`Delete ${b.name}? This removes the character and all of its items, and cannot be undone.`)) return;
+  const body = { command, charid: b.charid, ...extra };
+  if (command === 'summon') body.anchor_charid = $('summon-target').value;
+  msg.className = 'msg';
+  msg.textContent = 'Queued, waiting for the map server…';
+  detailBusy = true;
+  try {
+    const { id } = await api('/api/commands', body);
+    const c = await waitForCommand(id, msg);
+    if (c && c.status === 'done') {
+      if (command === 'delete') {
+        selected = null;
+        $('detail-title').textContent = 'Details';
+        $('detail-body').innerHTML = `<div class="empty">${esc(c.result)}</div>`;
+      } else {
+        await loadDetail(b.charid, false);
+        const m = $('detail-msg');
+        m.className = 'msg ok';
+        m.textContent = c.result;
+      }
+    }
+  } catch (e) {
+    msg.className = 'msg err';
+    msg.textContent = e.message;
+  } finally {
+    detailBusy = false;
+  }
+}
+
+function setupCreateForm() {
+  $('race').innerHTML = Object.entries(RACES).map(([v, n]) => `<option value="${v}" ${v === '7' ? 'selected' : ''}>${n}</option>`).join('');
+  const faces = [];
+  for (let i = 0; i < 16; i++) faces.push(`<option value="${i}">${Math.floor(i / 2) + 1}${'AB'[i % 2]}</option>`);
+  $('face').innerHTML = faces.join('');
+  $('placement').addEventListener('change', () => $('zone-fields').classList.toggle('hidden', $('placement').value !== 'zone'));
+
+  $('new-bot-btn').addEventListener('click', async () => {
+    $('create-card').classList.remove('hidden');
+    $('create-msg').textContent = '';
+    if (!zones.length) {
+      zones = await api('/api/zones');
+      $('zone').innerHTML = zones.map((z) => `<option value="${z.id}">${esc(z.name)} (${z.id})</option>`).join('');
+    }
+    $('create-form').name.focus();
+  });
+  $('create-cancel').addEventListener('click', () => $('create-card').classList.add('hidden'));
+
+  $('create-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const body = Object.fromEntries(f.entries());
+    body.command = 'create';
+    body.autospawn = f.get('autospawn') === 'on';
+    if (body.placement.startsWith('player:')) {
+      body.anchor_charid = body.placement.slice(7);
+      delete body.zone;
+    }
+    delete body.placement;
+    const msg = $('create-msg');
+    msg.className = 'msg';
+    msg.textContent = 'Queued, waiting for the map server…';
+    try {
+      const { id } = await api('/api/commands', body);
+      const c = await waitForCommand(id, msg);
+      if (c && c.status === 'done') {
+        e.target.name.value = '';
+        const created = state.bots.find((b) => b.name.toLowerCase() === String(body.name).toLowerCase());
+        if (created) { selected = created.charid; renderBots(); loadDetail(created.charid); }
+      }
+    } catch (err) {
+      msg.className = 'msg err';
+      msg.textContent = err.message;
+    }
+  });
+}
+
+$('bot-rows').addEventListener('click', (e) => {
+  const row = e.target.closest('tr[data-id]');
+  if (!row) return;
+  selected = Number(row.dataset.id);
+  renderBots();
+  loadDetail(selected);
+});
+
+setupCreateForm();
+refresh();
+setInterval(refresh, 4000);
+</script>
+</body>
+</html>
