@@ -3926,6 +3926,9 @@ void TrySkillUP(CCharEntity* PChar, xi::SkillType SkillID, uint8 lvl, bool force
                 SkillAmount = std::min<uint8>(SkillAmount, 9);
             }
 
+            // Fork setting (settings/default/custom.lua): skill gained per skill-up, capped at 0.9.
+            SkillAmount = static_cast<uint8>(std::clamp<long>(std::lround(SkillAmount * settings::get<double>("custom.COMBAT_SKILLUP_MULTIPLIER")), 1, 9));
+
             if (SkillAmount + CurSkill >= CapSkill)
             {
                 // skill is capped. set blue flag
@@ -4592,7 +4595,7 @@ void DistributeItem(CCharEntity* PChar, CBaseEntity* PEntity, uint16 itemid, uin
         thDropRate = thDropRateFunction(PMob->m_THLvl, thDropRate);
     }
 
-    if (thDropRate > 0 && (1 + xirand::GetRandomNumber(10000)) <= thDropRate * settings::get<float>("map.DROP_RATE_MULTIPLIER"))
+    if (thDropRate > 0 && (1 + xirand::GetRandomNumber(10000)) <= thDropRate * settings::get<float>("map.DROP_RATE_MULTIPLIER") * settings::get<float>("custom.DROP_RATE_MULTIPLIER"))
     {
         PChar->PTreasurePool->addItem(itemid, PEntity);
     }
@@ -4665,8 +4668,12 @@ void DistributeExperiencePoints(CCharEntity* PChar, CMobEntity* PMob)
     PMob->m_HiPartySize = pcinzone;
     PMob->m_HiPCLvl     = maxlevel;
 
+    // Fork setting (settings/default/custom.lua): grade each member against their own level
+    // instead of the highest level in range.
+    const bool useOwnLevel = settings::get<bool>("custom.EXP_USE_OWN_LEVEL");
+
     // clang-format off
-        PChar->ForAlliance([&PMob, &region, &maxlevel, &pcinzone](CBattleEntity* PPartyMember)
+        PChar->ForAlliance([&PMob, &region, &maxlevel, &pcinzone, useOwnLevel](CBattleEntity* PPartyMember)
         {
             CCharEntity* PMember = dynamic_cast<CCharEntity*>(PPartyMember);
             if (!PMember || PMember->isDead())
@@ -4676,8 +4683,10 @@ void DistributeExperiencePoints(CCharEntity* PChar, CMobEntity* PMob)
 
             const int16 moblevel    = PMob->GetMLevel() + PMob->getMod(xi::Mod::EXP_LVL_MOD);
             const uint8 memberlevel = GetExpLevel(PMember);
+            // With useOwnLevel the member is its own "highest level", so the Lua level scaling is 1.
+            const uint8 gradeLevel  = useOwnLevel ? memberlevel : maxlevel;
 
-            EMobDifficulty mobCheck = CheckMob(maxlevel, PMob);
+            EMobDifficulty mobCheck = CheckMob(gradeLevel, PMob);
 
             if (mobCheck == EMobDifficulty::TooWeak || PMember->getZone() != PMob->getZone())
             {
@@ -4693,14 +4702,14 @@ void DistributeExperiencePoints(CCharEntity* PChar, CMobEntity* PMob)
             const bool chainActive = PMember->expChain.chainTime > timer::now() || PMember->expChain.chainTime == timer::time_point::min();
 
             luautils::CalcExpInput input{};
-            input.baseExp            = GetBaseExp(maxlevel, moblevel);
+            input.baseExp            = GetBaseExp(gradeLevel, moblevel);
             input.mobDifficulty      = static_cast<uint8>(mobCheck);
             input.memberLevel        = memberlevel;
-            input.highestMemberLevel = maxlevel;
+            input.highestMemberLevel = gradeLevel;
             input.partySize          = pcinzone;
             // Monipulators only party with each other, so the whole party shares one curve.
             input.memberTNL          = GetExpNEXTLevelForChar(PMember, memberlevel);
-            input.highestMemberTNL   = GetExpNEXTLevelForChar(PMember, maxlevel);
+            input.highestMemberTNL   = GetExpNEXTLevelForChar(PMember, gradeLevel);
             input.regionId           = static_cast<uint8>(region);
             input.chainNumber        = PMember->expChain.chainNumber;
             input.chainActive        = chainActive;

@@ -87,6 +87,31 @@ CLuaSimulation::CLuaSimulation(MapEngine* _mapServer, const std::shared_ptr<InMe
 : engine_{ _mapServer }
 , sink_{ _sink }
 {
+    // Fork: tests run against vanilla rules, so every custom.* gameplay mod (settings/default/custom.lua)
+    // starts off: false for toggles, 1.0 for multipliers. Tests of a mod turn it on with setSetting().
+    std::vector<std::pair<std::string, settings::SettingsVariant>> vanilla;
+    for (const auto& [key, value] : settings::settingsMap)
+    {
+        if (key.starts_with("custom."))
+        {
+            value.visit([&]<typename T>(const T&)
+                        {
+                            if constexpr (std::is_same_v<T, bool>)
+                            {
+                                vanilla.emplace_back(key, false);
+                            }
+                            else if constexpr (std::is_same_v<T, double>)
+                            {
+                                vanilla.emplace_back(key, 1.0);
+                            }
+                        });
+        }
+    }
+
+    for (const auto& [key, value] : vanilla)
+    {
+        applySetting(key, value);
+    }
 }
 
 void CLuaSimulation::cleanClients(Maybe<ClientScope> scope)

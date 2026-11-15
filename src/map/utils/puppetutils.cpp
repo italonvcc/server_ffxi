@@ -623,6 +623,9 @@ void TrySkillUP(CAutomatonEntity* PAutomaton, xi::SkillType SkillID, uint8 lvl)
                 SkillAmount = std::min<uint8>(SkillAmount, 9);
             }
 
+            // Fork setting (settings/default/custom.lua): skill gained per skill-up, capped at 0.9.
+            SkillAmount = static_cast<uint8>(std::clamp<long>(std::lround(SkillAmount * settings::get<double>("custom.COMBAT_SKILLUP_MULTIPLIER")), 1, 9));
+
             if (SkillAmount + CurSkill >= MaxSkill)
             {
                 SkillAmount = MaxSkill - CurSkill;

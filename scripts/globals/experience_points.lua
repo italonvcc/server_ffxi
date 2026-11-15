@@ -63,6 +63,11 @@ end
 -- Experience share calculation based on party size and Signet status.
 -----------------------------------
 xi.experiencePoints.getExperienceShare = function(partySize, hasSignet)
+    -- Fork setting (settings/default/custom.lua): no party size penalty.
+    if xi.settings.custom and xi.settings.custom.EXP_NO_PARTY_PENALTY then
+        return 1.0
+    end
+
     if partySize > 6 then
         return 1.8 / partySize
     end
