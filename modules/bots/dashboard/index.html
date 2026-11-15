@@ -263,12 +263,30 @@ function renderBots() {
       <td>${esc(b.job)} ${b.level}</td>
       <td>${esc(b.zone)}</td>
       <td><span class="tag ${b.online ? 'ok' : ''}">${b.online ? 'Online' : 'Offline'}</span>
-          ${b.autospawn ? '<div class="sub">autospawn</div>' : ''}</td>
+          ${b.online ? `<div class="sub">${esc(aiLabel(b))}</div>` : (b.autospawn ? '<div class="sub">autospawn</div>' : '')}</td>
       <td><div class="bars" title="HP ${b.hp}/${b.max_hp}  MP ${b.mp}/${b.max_mp}">
         <div class="bar hp"><span style="width:${pct(b.hp, b.max_hp)}%"></span></div>
         <div class="bar mp"><span style="width:${pct(b.mp, b.max_mp)}%"></span></div>
       </div></td>
     </tr>`).join('');
+}
+
+// What the bot's AI is doing right now
+function aiLabel(b) {
+  switch (b.ai_state) {
+    case 'follow': return `following ${b.leader || 'leader'}`;
+    case 'wait': return `waiting for ${b.leader || 'leader'}`;
+    case 'return': return 'heading home';
+    case 'fight': return `fighting with ${b.leader || 'leader'}`;
+    case 'rest': return 'resting';
+    case 'dead': return 'knocked out';
+    default: return 'idle';
+  }
+}
+
+function expLabel(exp) {
+  if (!exp) return '—';
+  return exp.next ? `${exp.current.toLocaleString()} / ${exp.next.toLocaleString()} to next level` : exp.current.toLocaleString();
 }
 
 function renderCommands() {
@@ -323,7 +341,7 @@ async function loadDetail(charid, scroll = true) {
   $('detail-body').innerHTML = `
     <div class="actions">
       ${b.online ? `<button data-cmd="despawn">Despawn</button>` : `<button class="primary" data-cmd="spawn">Spawn</button>`}
-      ${state.players.length ? `<select id="summon-target">${playerOpts}</select><button data-cmd="summon">Move next to</button>` : ''}
+      ${state.players.length ? `<select id="summon-target">${playerOpts}</select><button data-cmd="summon">Move next to</button>${b.online ? '<button data-cmd="invite">Join party of</button>' : ''}` : ''}
       <label class="check"><input type="checkbox" id="autospawn-toggle" ${b.autospawn ? 'checked' : ''}> Autospawn</label>
       <span class="spacer"></span>
       <button class="danger" data-cmd="delete">Delete</button>
@@ -336,10 +354,20 @@ async function loadDetail(charid, scroll = true) {
       <dt>Job</dt><dd>${esc(b.job)} ${b.level}${b.sub_job ? ' / ' + esc(b.sub_job) : ''}</dd>
       <dt>Nation</dt><dd>${esc(b.nation)}</dd>
       <dt>Zone</dt><dd>${esc(b.zone)} <span class="sub">(${b.pos.join(', ')})</span></dd>
+      <dt>Exp</dt><dd>${expLabel(b.exp)}</dd>
+      ${b.job_levels.length > 1 ? `<dt>Jobs</dt><dd>${b.job_levels.map((j) => `${esc(j.job)} ${j.level}`).join(', ')}</dd>` : ''}
       <dt>HP / MP</dt><dd>${b.hp} / ${b.max_hp} &nbsp; ${b.mp} / ${b.max_mp}</dd>
+      ${b.online ? `<dt>AI</dt><dd>${esc(aiLabel(b))}</dd>` : ''}
+      ${b.home ? `<dt>Home</dt><dd>${esc(b.home.zone)} <span class="sub">(${b.home.pos.join(', ')})</span></dd>` : ''}
       <dt>Gil</dt><dd>${b.gil.toLocaleString()}</dd>
       <dt>Created</dt><dd>${esc(b.created)} <span class="sub">charid ${b.charid}</span></dd>
     </dl>
+
+    <div class="section-title">Skills</div>
+    ${b.skills.length ? `<div class="grid2">${b.skills.map((s) => `<div class="slot"><span class="k">${esc(s.name)}</span><span class="v">${s.value.toFixed(1)}</span></div>`).join('')}</div>` : '<div class="sub">No skill gained yet</div>'}
+
+    <div class="section-title">Spells (${b.spells.length})</div>
+    ${b.spells.length ? `<div>${b.spells.map((s) => esc(s)).join(', ')}</div>` : '<div class="sub">None learned</div>'}
 
     <div class="section-title">Equipment</div>
     <div class="grid2">
@@ -373,7 +401,7 @@ async function runDetailCommand(b, command, extra = {}) {
   const msg = $('detail-msg');
   if (command === 'delete' && !confirm(`Delete ${b.name}? This removes the character and all of its items, and cannot be undone.`)) return;
   const body = { command, charid: b.charid, ...extra };
-  if (command === 'summon') body.anchor_charid = $('summon-target').value;
+  if (command === 'summon' || command === 'invite') body.anchor_charid = $('summon-target').value;
   msg.className = 'msg';
   msg.textContent = 'Queued, waiting for the map server…';
   detailBusy = true;

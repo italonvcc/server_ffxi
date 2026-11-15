@@ -38,8 +38,9 @@ cmake --build build --config RelWithDebInfo --target xi_map
 ```
 
 The last build step copies `xi_map.exe` to the repo root. It fails with "Permission denied"
-while xi_map is running (the exe is locked); compile and link have still succeeded. Adding
-or removing module files (or editing `modules/init.txt`) re-runs CMake configure.
+while xi_map is running (the exe is locked); compile and link have still succeeded. Editing
+`modules/init.txt` re-runs CMake configure; adding or removing a module `.cpp` does not,
+so run `cmake build` first or the new file is silently left out.
 
 ## Running the servers
 

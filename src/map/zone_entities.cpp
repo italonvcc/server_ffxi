@@ -1951,7 +1951,10 @@ auto CZoneEntities::charTick(CCharEntity* PChar, timer::time_point tick) -> Task
         }
     }
 
-    if (PChar->requestedZoneChange || PChar->requestedWarp != WarpRequest::None || PChar->status == xi::Status::Shutdown)
+    // A char without a session (modules/bots) has no client to send to another zone;
+    // the bots module cancels the request itself.
+    if (PChar->PSession != nullptr &&
+        (PChar->requestedZoneChange || PChar->requestedWarp != WarpRequest::None || PChar->status == xi::Status::Shutdown))
     {
         m_charsToChangeZone.insert(PChar);
     }

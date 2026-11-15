@@ -3,9 +3,9 @@
 -- desc: Control bot players in-game (see modules/bots/cpp/bot_players.cpp).
 --       Creating and deleting bots is done from the web dashboard (modules/bots/dashboard).
 --       !bot list            -- bots that are spawned right now
---       !bot spawn <name>    -- spawn a bot at its saved position
+--       !bot spawn <name>    -- spawn a bot at its home
 --       !bot despawn <name>  -- remove a bot from the world
---       !bot here <name>     -- move a bot next to you
+--       !bot here <name>     -- move a bot next to you (that spot becomes its home)
 -----------------------------------
 require('modules/module_utils')
 -----------------------------------
