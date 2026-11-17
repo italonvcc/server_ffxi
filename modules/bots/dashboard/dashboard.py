@@ -38,6 +38,9 @@ JOBS = [
     "NON", "WAR", "MNK", "WHM", "BLM", "RDM", "THF", "PLD", "DRK", "BST", "BRD", "RNG",
     "SAM", "NIN", "DRG", "SMN", "BLU", "COR", "PUP", "DNC", "SCH", "GEO", "RUN", "MON",
 ]
+# Jobs a bot can be created as (the map server checks this too): the six starting jobs,
+# and RNG, SAM, NIN, which the bot module gives starting gear
+START_JOBS = (1, 2, 3, 4, 5, 6, 11, 12, 13)
 RACES = {1: "Hume (M)", 2: "Hume (F)", 3: "Elvaan (M)", 4: "Elvaan (F)",
          5: "Tarutaru (M)", 6: "Tarutaru (F)", 7: "Mithra", 8: "Galka"}
 SIZES = {0: "Small", 1: "Medium", 2: "Large"}
@@ -64,7 +67,7 @@ LOC_INVENTORY = 0
 JOB_COLUMNS = {i: name.lower() for i, name in enumerate(JOBS) if i > 0}
 
 NAME_RE = re.compile(r"^[A-Z][a-z]{2,14}$")
-COMMANDS = {"create", "spawn", "despawn", "summon", "autospawn", "delete", "invite"}
+COMMANDS = {"create", "spawn", "despawn", "summon", "autospawn", "delete", "invite", "jobs"}
 
 
 def read_credentials():
@@ -124,6 +127,13 @@ def job_level(jobs_row, job_id):
     return jobs_row.get(column, 0) if jobs_row and column else 0
 
 
+def sub_job_level(jobs_row, main_id, sub_id):
+    """The subjob counts for half the main job's level, at least 1."""
+    if not sub_id:
+        return 0
+    return max(1, min(job_level(jobs_row, sub_id), job_level(jobs_row, main_id) // 2))
+
+
 def job_exp(conn, charid, job_id, exp_next):
     """Exp of the main job (char_exp) and what the next level needs (written by the map server)."""
     column = JOB_COLUMNS.get(job_id)
@@ -160,6 +170,8 @@ def get_state(conn):
             "race": RACES.get(b["race"], "?"),
             "job": JOBS[b["mjob"]] if b["mjob"] is not None and b["mjob"] < len(JOBS) else "?",
             "level": job_level(b, b["mjob"]),
+            "sub_job": JOBS[b["sjob"]] if b["sjob"] and b["sjob"] < len(JOBS) else None,
+            "sub_level": sub_job_level(b, b["mjob"], b["sjob"]),
             "zone": (b["zone_name"] or "").replace("_", " "),
             "online": bool(b["online"]),
             "autospawn": bool(b["autospawn"]),
@@ -167,6 +179,7 @@ def get_state(conn):
             "pos": [round(b["pos_x"], 2), round(b["pos_y"], 2), round(b["pos_z"], 2)],
             "ai_state": b["ai_state"] if b["online"] else None,
             "leader": b["leader"] or None,
+            "action": (b.get("action") or None) if b["online"] else None,
             "exp": job_exp(conn, b["charid"], b["mjob"], b["exp_next"]),
         })
 
@@ -254,6 +267,10 @@ def get_bot(conn, charid):
         ORDER BY s.spellid
     """, (charid,))
 
+    # Written by the map server: what the bot can use with the weapons it holds
+    ws_row = query(conn, "SELECT weapon_skills FROM bot_players WHERE charid = ?", (charid,))
+    weapon_skills = [pretty_item(n) for n in (ws_row[0]["weapon_skills"] if ws_row else "").split(",") if n]
+
     return {
         "charid": b["charid"],
         "name": b["charname"],
@@ -263,12 +280,16 @@ def get_bot(conn, charid):
         "nation": NATIONS.get(b["nation"], "?"),
         "job": JOBS[b["mjob"]] if b["mjob"] is not None and b["mjob"] < len(JOBS) else "?",
         "sub_job": JOBS[b["sjob"]] if b["sjob"] else None,
+        "sub_level": sub_job_level(jobs_row, b["mjob"], b["sjob"]),
+        "job_id": b["mjob"],
+        "sub_job_id": b["sjob"] or 0,
         "level": job_level(jobs_row, b["mjob"]),
         "job_levels": job_levels,
         "exp": job_exp(conn, charid, b["mjob"], b["exp_next"]),
         "skills": [{"id": r["skillid"], "name": SKILLS.get(r["skillid"], f"Skill {r['skillid']}"),
                     "value": r["value"] / 10} for r in skills],
         "spells": [pretty_item(r["name"]) or f"Spell {r['spellid']}" for r in spells],
+        "weapon_skills": weapon_skills,
         "online": bool(b["online"]),
         "autospawn": bool(b["autospawn"]),
         "zone": (b["zone_name"] or "").replace("_", " "),
@@ -276,6 +297,7 @@ def get_bot(conn, charid):
         "hp": b["hp"], "max_hp": b["max_hp"], "mp": b["mp"], "max_mp": b["max_mp"],
         "ai_state": b["ai_state"] if b["online"] else None,
         "leader": b["leader"] or None,
+        "action": (b.get("action") or None) if b["online"] else None,
         "home": {"zone": (b["home_zone_name"] or "").replace("_", " "),
                  "pos": [round(b["home_x"], 2), round(b["home_y"], 2), round(b["home_z"], 2)]} if b["home_zone"] else None,
         "gil": gil[0]["quantity"] if gil else 0,
@@ -342,15 +364,35 @@ def queue_command(conn, body):
             raise BadRequest(f"The name {name} is taken.")
         row.update(name=name,
                    race=as_int("race", 1, 8, True), face=as_int("face", 0, 15, True),
-                   size=as_int("size", 0, 2, True), job=as_int("job", 1, 6, True),
+                   size=as_int("size", 0, 2, True),
                    level=as_int("level", 1, 99) or 1, nation=as_int("nation", 0, 2),
                    autospawn=1 if body.get("autospawn", True) else 0)
+        row["job"] = as_int("job", 1, 13, True)
+        if row["job"] not in START_JOBS:
+            raise BadRequest("Bots can start as WAR, MNK, WHM, BLM, RDM, THF, RNG, SAM or NIN.")
     else:
         row["charid"] = as_int("charid", 1, 2**32 - 1, True)
         if not query(conn, "SELECT charid FROM bot_players WHERE charid = ?", (row["charid"],)):
             raise BadRequest("That character is not a bot.")
         if command == "autospawn":
             row["autospawn"] = 1 if body.get("autospawn") else 0
+        if command == "jobs":
+            # job: the new main job (left out = keep). subjob: the new subjob (left out =
+            # keep, 0 = none). The map server checks the rest (same job twice, in a fight...).
+            job = as_int("job", 1, 13)
+            subjob = as_int("subjob", 0, 13)
+            if job is None and subjob is None:
+                raise BadRequest("Pick a job or a subjob.")
+            if job is not None and job not in START_JOBS:
+                raise BadRequest("Bot jobs are WAR, MNK, WHM, BLM, RDM, THF, RNG, SAM and NIN.")
+            if subjob not in (None, 0) and subjob not in START_JOBS:
+                raise BadRequest("Bot jobs are WAR, MNK, WHM, BLM, RDM, THF, RNG, SAM and NIN.")
+            if job is not None and job == subjob:
+                raise BadRequest("The main job and the subjob can't be the same.")
+            if job is not None:
+                row["job"] = job
+            if subjob is not None:
+                row["subjob"] = subjob
 
     if command in ("create", "summon", "spawn"):
         anchor = as_int("anchor_charid", 1, 2**32 - 1)

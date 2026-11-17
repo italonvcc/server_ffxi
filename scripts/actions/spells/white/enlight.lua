@@ -10,7 +10,7 @@ end
 
 spellObject.onSpellCast = function(caster, target, spell)
     local effect = xi.effect.ENLIGHT
-    local magicskill = target:getSkillLevel(xi.skill.DIVINE_MAGIC)
+    local magicskill = caster:getSkillLevel(xi.skill.DIVINE_MAGIC)
     local potency = (magicskill / 8) + 12.5
 
     if target:addStatusEffect(effect, { power = potency, duration = 180, origin = caster }) then

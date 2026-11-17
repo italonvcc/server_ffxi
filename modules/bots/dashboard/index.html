@@ -187,6 +187,7 @@ dd { margin: 0; }
             <select name="job">
               <option value="1">Warrior</option><option value="2">Monk</option><option value="3" selected>White Mage</option>
               <option value="4">Black Mage</option><option value="5">Red Mage</option><option value="6">Thief</option>
+              <option value="11">Ranger</option><option value="12">Samurai</option><option value="13">Ninja</option>
             </select>
           </label>
           <label>Level <input name="level" type="number" min="1" max="99" value="1"></label>
@@ -234,6 +235,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 let state = { bots: [], players: [], commands: [], server: {} };
 let selected = null;
 let zones = [];
+let jobPick = null; // { charid, job, sub }: the job selects of the detail panel
+const BOT_JOBS = [[1, 'WAR'], [2, 'MNK'], [3, 'WHM'], [4, 'BLM'], [5, 'RDM'], [6, 'THF'], [11, 'RNG'], [12, 'SAM'], [13, 'NIN']];
 let detailBusy = false; // a command from the detail panel is running; don't redraw it
 
 async function api(path, body) {
@@ -260,7 +263,7 @@ function renderBots() {
   $('bot-rows').innerHTML = state.bots.map((b) => `
     <tr data-id="${b.charid}" class="${b.charid === selected ? 'selected' : ''}">
       <td><div class="name">${esc(b.name)}</div><div class="sub">${esc(b.race)}</div></td>
-      <td>${esc(b.job)} ${b.level}</td>
+      <td>${esc(b.job)} ${b.level}${b.sub_job ? ` / ${esc(b.sub_job)} ${b.sub_level}` : ''}</td>
       <td>${esc(b.zone)}</td>
       <td><span class="tag ${b.online ? 'ok' : ''}">${b.online ? 'Online' : 'Offline'}</span>
           ${b.online ? `<div class="sub">${esc(aiLabel(b))}</div>` : (b.autospawn ? '<div class="sub">autospawn</div>' : '')}</td>
@@ -271,8 +274,9 @@ function renderBots() {
     </tr>`).join('');
 }
 
-// What the bot's AI is doing right now
+// What the bot's AI is doing right now: the spell it just cast, else its state
 function aiLabel(b) {
+  if (b.action) return `using ${b.action.replace(/_/g, ' ').replace(' > ', ' on ')}`;
   switch (b.ai_state) {
     case 'follow': return `following ${b.leader || 'leader'}`;
     case 'wait': return `waiting for ${b.leader || 'leader'}`;
@@ -337,6 +341,9 @@ async function loadDetail(charid, scroll = true) {
     return;
   }
   $('detail-title').innerHTML = `${esc(b.name)} <span class="tag ${b.online ? 'ok' : ''}">${b.online ? 'Online' : 'Offline'}</span>`;
+  // What is picked in the job selects survives the periodic redraw
+  if (!jobPick || jobPick.charid !== b.charid) jobPick = { charid: b.charid, job: b.job_id, sub: b.sub_job_id };
+  const pick = jobPick;
   const playerOpts = state.players.map((p) => `<option value="${p.charid}">${esc(p.name)} (${esc(p.zone)})</option>`).join('');
   $('detail-body').innerHTML = `
     <div class="actions">
@@ -346,12 +353,17 @@ async function loadDetail(charid, scroll = true) {
       <span class="spacer"></span>
       <button class="danger" data-cmd="delete">Delete</button>
     </div>
+    <div class="actions">
+      <label class="check">Job <select id="job-pick">${BOT_JOBS.map(([id, n]) => `<option value="${id}" ${id === pick.job ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+      <label class="check">Subjob <select id="subjob-pick"><option value="0">None</option>${BOT_JOBS.map(([id, n]) => `<option value="${id}" ${id === pick.sub ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+      <button id="jobs-btn">Change job</button>
+    </div>
     <div class="msg" id="detail-msg"></div>
 
     <div class="section-title">Character</div>
     <dl>
       <dt>Race</dt><dd>${esc(b.race)}, face ${esc(b.face)}, ${esc(b.size).toLowerCase()}</dd>
-      <dt>Job</dt><dd>${esc(b.job)} ${b.level}${b.sub_job ? ' / ' + esc(b.sub_job) : ''}</dd>
+      <dt>Job</dt><dd>${esc(b.job)} ${b.level}${b.sub_job ? ` / ${esc(b.sub_job)} ${b.sub_level}` : ''}</dd>
       <dt>Nation</dt><dd>${esc(b.nation)}</dd>
       <dt>Zone</dt><dd>${esc(b.zone)} <span class="sub">(${b.pos.join(', ')})</span></dd>
       <dt>Exp</dt><dd>${expLabel(b.exp)}</dd>
@@ -366,6 +378,9 @@ async function loadDetail(charid, scroll = true) {
     <div class="section-title">Skills</div>
     ${b.skills.length ? `<div class="grid2">${b.skills.map((s) => `<div class="slot"><span class="k">${esc(s.name)}</span><span class="v">${s.value.toFixed(1)}</span></div>`).join('')}</div>` : '<div class="sub">No skill gained yet</div>'}
 
+    <div class="section-title">Weapon skills (${b.weapon_skills.length})</div>
+    ${b.weapon_skills.length ? `<div>${b.weapon_skills.map((s) => esc(s)).join(', ')}</div>` : '<div class="sub">None with the weapons it holds</div>'}
+
     <div class="section-title">Spells (${b.spells.length})</div>
     ${b.spells.length ? `<div>${b.spells.map((s) => esc(s)).join(', ')}</div>` : '<div class="sub">None learned</div>'}
 
@@ -379,6 +394,13 @@ async function loadDetail(charid, scroll = true) {
   `;
   $('detail-body').querySelectorAll('button[data-cmd]').forEach((btn) => btn.addEventListener('click', () => runDetailCommand(b, btn.dataset.cmd)));
   $('autospawn-toggle').addEventListener('change', (e) => runDetailCommand(b, 'autospawn', { autospawn: e.target.checked }));
+  $('job-pick').addEventListener('change', (e) => { jobPick.job = Number(e.target.value); });
+  $('subjob-pick').addEventListener('change', (e) => { jobPick.sub = Number(e.target.value); });
+  $('jobs-btn').addEventListener('click', () => {
+    const body = { job: jobPick.job, subjob: jobPick.sub };
+    jobPick = null; // show the bot's real jobs again once the command is done
+    runDetailCommand(b, 'jobs', body);
+  });
   if (scroll && window.innerWidth < 900) $('detail-card').scrollIntoView({ behavior: 'smooth' });
 }
 

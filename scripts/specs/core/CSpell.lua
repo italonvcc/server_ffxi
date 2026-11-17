@@ -34,6 +34,22 @@ end
 function CSpell:setRadius(radius)
 end
 
+---@param validTarget integer
+---@return nil
+function CSpell:setValidTarget(validTarget)
+end
+
+---@param range number
+---@return nil
+function CSpell:setRange(range)
+end
+
+---@param job xi.job
+---@param level integer 0 = the job never learns it
+---@return nil
+function CSpell:setJobLevel(job, level)
+end
+
 ---@param animationID integer
 ---@return nil
 function CSpell:setAnimation(animationID)
@@ -72,6 +88,22 @@ end
 ---@nodiscard
 ---@return number
 function CSpell:getRadius()
+end
+
+---@nodiscard
+---@return integer
+function CSpell:getValidTarget()
+end
+
+---@nodiscard
+---@return number
+function CSpell:getRange()
+end
+
+---@nodiscard
+---@param job xi.job
+---@return integer 255 = the job never learns it
+function CSpell:getJobLevel(job)
 end
 
 ---@nodiscard

@@ -38,6 +38,21 @@ ALTER TABLE `bot_players`
   ADD COLUMN IF NOT EXISTS `exp` SMALLINT(5) UNSIGNED NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS `exp_next` SMALLINT(5) UNSIGNED NOT NULL DEFAULT 0;
 
+-- Added with the per-job AI. Live column: the last spell the bot cast ("cure_ii > Kenji"),
+-- empty a few seconds later.
+ALTER TABLE `bot_players`
+  ADD COLUMN IF NOT EXISTS `action` VARCHAR(48) NOT NULL DEFAULT '';
+
+-- Added with food: the item id of the food the bot keeps eating (the last kind a player
+-- traded to it), 0 for none.
+ALTER TABLE `bot_players`
+  ADD COLUMN IF NOT EXISTS `food` SMALLINT(5) UNSIGNED NOT NULL DEFAULT 0;
+
+-- For the dashboard: the weapon skills the bot can use with the weapons it holds, by name,
+-- comma separated. Written by the map server when the set changes.
+ALTER TABLE `bot_players`
+  ADD COLUMN IF NOT EXISTS `weapon_skills` VARCHAR(1024) NOT NULL DEFAULT '';
+
 -- Command queue, run by the map server every time server tick (2.4s).
 -- command: create | spawn | despawn | summon | autospawn | delete | invite
 --          (testing aids: move | puppet | engage)
@@ -51,6 +66,7 @@ CREATE TABLE IF NOT EXISTS `bot_commands` (
   `face` TINYINT(3) UNSIGNED NULL DEFAULT NULL,
   `size` TINYINT(3) UNSIGNED NULL DEFAULT NULL,
   `job` TINYINT(3) UNSIGNED NULL DEFAULT NULL,
+  `subjob` TINYINT(3) UNSIGNED NULL DEFAULT NULL,
   `level` TINYINT(3) UNSIGNED NULL DEFAULT NULL,
   `nation` TINYINT(3) UNSIGNED NULL DEFAULT NULL,
   `autospawn` TINYINT(1) UNSIGNED NULL DEFAULT NULL,

@@ -57,6 +57,9 @@ public:
     void setAoE(uint8 aoe);
     void setFlag(uint8 flags);
     void setRadius(float radius);
+    void setValidTarget(uint16 validTarget);
+    void setRange(float range);
+    void setJobLevel(uint8 job, uint8 level);
     void setAnimation(uint16 animationID);
     void setCastTime(uint32 casttime);
     void setMPCost(uint16 mpcost);
@@ -65,6 +68,9 @@ public:
     auto isAoE() const -> bool;
     auto isConal() const -> bool;
     auto getRadius() -> float;
+    auto getValidTarget() -> uint16;
+    auto getRange() -> float;
+    auto getJobLevel(uint8 job) -> uint8;
     auto tookEffect() -> bool;
     auto getTotalTargets() -> uint16;
     auto getMagicBurstMessage() const -> MsgBasic;

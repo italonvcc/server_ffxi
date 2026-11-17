@@ -90,7 +90,9 @@ const auto validContainers = [](const CCharEntity* PChar) -> std::set<CONTAINER_
     }
 
     // Storage only allowed if in your OWN Mog House.
-    if (PChar->m_moghouseID == PChar->id)
+    // server_ffxi: custom.NOMAD_MOOGLE_STORAGE also allows it in a zone with a Nomad Moogle.
+    if (PChar->m_moghouseID == PChar->id ||
+        (settings::get<bool>("custom.NOMAD_MOOGLE_STORAGE") && PChar->loc.zone->CanUseMisc(xi::ZoneMisc::Mogmenu)))
     {
         allowedContainers.insert(LOC_STORAGE);
     }

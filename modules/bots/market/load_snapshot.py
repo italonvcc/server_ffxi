@@ -2,7 +2,7 @@
 
     python modules/bots/market/load_snapshot.py import-browse <dump>   # mktExport('browse') output
     python modules/bots/market/load_snapshot.py import-sales <dump>    # mktExport('sales') output
-    python modules/bots/market/load_snapshot.py load [--price lowest|median] [--dry-run]
+    python modules/bots/market/load_snapshot.py load [--price median|lowest] [--dry-run]
 
 <dump> is a file holding 'BEGIN<base64 gzip>END' (crawl.js), raw or inside a JSON tool result.
 
@@ -145,7 +145,7 @@ def main():
     sub.add_parser("import-browse").add_argument("dump")
     sub.add_parser("import-sales").add_argument("dump")
     p = sub.add_parser("load")
-    p.add_argument("--price", choices=["lowest", "median"], default="lowest")
+    p.add_argument("--price", choices=["lowest", "median"], default="median")
     p.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     if a.cmd == "import-browse":

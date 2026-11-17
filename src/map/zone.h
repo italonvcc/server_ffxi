@@ -205,6 +205,7 @@ public:
     virtual auto GetEntity(uint16 targid, uint8 filter = -1) -> CBaseEntity*; // Get a pointer to any entity in the zone
 
     auto CanUseMisc(xi::ZoneMisc misc) const -> bool;
+    void AddMisc(xi::ZoneMisc misc); // server_ffxi: lets modules turn on a flag (e.g. mogmenu for a placed Nomad Moogle)
     void SetWeather(xi::Weather weather);
     void UpdateWeather();
 

@@ -3889,6 +3889,23 @@ auto CBattleEntity::OnAttack(CAttackState& state, action_t& action) -> bool
             actionResult.param = 0;
         }
 
+        // Fork setting (settings/default/custom.lua): a swing that does no damage (miss, parry,
+        // shadow, anticipate, counter) still rolls a weapon skill-up, like a hit does in CAttack::ProcessDamage.
+        if (actionResult.resolution == ActionResolution::Miss || actionResult.resolution == ActionResolution::Parry)
+        {
+            if (auto* PChar = dynamic_cast<CCharEntity*>(this); PChar && settings::get<bool>("custom.SKILLUP_ON_MISS"))
+            {
+                if (attack.GetAttackType() == PHYSICAL_ATTACK_TYPE::DAKEN)
+                {
+                    charutils::TrySkillUP(PChar, xi::SkillType::Throwing, PTarget->GetMLevel());
+                }
+                else if (auto* weapon = dynamic_cast<CItemWeapon*>(m_Weapons[attack.GetWeaponSlot()]))
+                {
+                    charutils::TrySkillUP(PChar, weapon->getSkillType(), PTarget->GetMLevel());
+                }
+            }
+        }
+
         // Run enspell/spike routines for hit, guard, or block as long as this isn't a Daken swing
         if (actionResult.resolution != ActionResolution::Miss && actionResult.resolution != ActionResolution::Parry && attack.GetAttackType() != PHYSICAL_ATTACK_TYPE::DAKEN)
         {

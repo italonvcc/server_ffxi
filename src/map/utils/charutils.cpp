@@ -3867,6 +3867,12 @@ void TrySkillUP(CCharEntity* PChar, xi::SkillType SkillID, uint8 lvl, bool force
             SkillUpChance *= ((100.0f + PChar->getMod(xi::Mod::MAGIC_SKILLUP_RATE)) / 100.0f);
         }
 
+        // Fork setting (settings/default/custom.lua): every eligible try is a skill-up.
+        if (settings::get<bool>("custom.COMBAT_SKILLUP_GUARANTEED"))
+        {
+            SkillUpChance = 1.0;
+        }
+
         if (Diff > 0 && (random < SkillUpChance || forceSkillUp))
         {
             double chance      = 0;
@@ -3926,8 +3932,9 @@ void TrySkillUP(CCharEntity* PChar, xi::SkillType SkillID, uint8 lvl, bool force
                 SkillAmount = std::min<uint8>(SkillAmount, 9);
             }
 
-            // Fork setting (settings/default/custom.lua): skill gained per skill-up, capped at 0.9.
-            SkillAmount = static_cast<uint8>(std::clamp<long>(std::lround(SkillAmount * settings::get<double>("custom.COMBAT_SKILLUP_MULTIPLIER")), 1, 9));
+            // Fork setting (settings/default/custom.lua): skill gained per skill-up. No 0.9 cap, so
+            // one skill-up can raise the skill by more than one level (handled below).
+            SkillAmount = static_cast<uint8>(std::clamp<long>(std::lround(SkillAmount * settings::get<double>("custom.COMBAT_SKILLUP_MULTIPLIER")), 1, 255));
 
             if (SkillAmount + CurSkill >= CapSkill)
             {
@@ -3946,7 +3953,9 @@ void TrySkillUP(CCharEntity* PChar, xi::SkillType SkillID, uint8 lvl, bool force
             PChar->RealSkills.skill[rawSkillID] += SkillAmount;
             PChar->pushPacket<GP_SERV_COMMAND_BATTLE_MESSAGE>(PChar, PChar, rawSkillID, SkillAmount, MsgBasic::SkillGain);
 
-            if ((CurSkill / 10) < (CurSkill + SkillAmount) / 10) // if gone up a level
+            // Levels gained: at most 1 in vanilla (0.9 cap), more with custom.COMBAT_SKILLUP_MULTIPLIER.
+            const uint16 levelsGained = (CurSkill + SkillAmount) / 10 - CurSkill / 10;
+            if (levelsGained > 0) // if gone up a level
             {
                 // Light/Dark Arts artificially boost certain skills
                 // if skillup happens when real skill is below the base for active arts, don't increment the shown skill
@@ -3955,12 +3964,12 @@ void TrySkillUP(CCharEntity* PChar, xi::SkillType SkillID, uint8 lvl, bool force
                     // if the bonus is the same, our real skill was already past the base bonus, so increment the shown skill from skillup
                     if (skillBonus == ArtsBonusSkill(PChar, SkillID))
                     {
-                        PChar->WorkingSkills.skill[rawSkillID] += 1;
+                        PChar->WorkingSkills.skill[rawSkillID] += levelsGained;
                     }
                 }
                 else
                 {
-                    PChar->WorkingSkills.skill[rawSkillID] += 1;
+                    PChar->WorkingSkills.skill[rawSkillID] += levelsGained;
                 }
                 PChar->pushPacket<GP_SERV_COMMAND_CLISTATUS2>(PChar);
                 PChar->pushPacket<GP_SERV_COMMAND_BATTLE_MESSAGE>(PChar, PChar, rawSkillID, (CurSkill + SkillAmount) / 10, MsgBasic::SkillLevelUp);

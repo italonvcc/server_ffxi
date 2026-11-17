@@ -524,6 +524,7 @@ xi.spells.damage.calculateDayAndWeather = function(caster, spellElement, alwaysA
 
     if
         alwaysApply or                                    -- Helixes and other actions always apply both bonuses and penalties.
+        (xi.settings.custom and xi.settings.custom.DAY_WEATHER_ALWAYS) or -- CUSTOM (settings/default/custom.lua): no 33% roll.
         math.randomInt(1, 100) <= 33 or                      -- Random. Applies to both bonuses and penalties.
         caster:getMod(xi.mod.FORCE_DW_BONUS_PENALTY) >= 1 -- Hachirin-no-Obi forces both bonuses and penalties.
     then

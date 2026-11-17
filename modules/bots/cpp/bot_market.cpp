@@ -4,13 +4,17 @@
  * A simulated auction house economy driven by a price snapshot from ffxiah.com
  * (bot_market_prices, loaded by modules/bots/market/load_snapshot.py):
  *
- * - Restock: keeps up to min(stock, kMaxListings) listings of each snapshot item on
- *   the auction house, at the snapshot price, sold by kMarketName (seller = 0).
+ * - Restock: keeps clamp(stock, kMinListings, kMaxListings) listings of each snapshot
+ *   item on the auction house, at the snapshot price, sold by kMarketName (seller = 0).
  *   Players buy them through the normal AH code; seller 0 means nobody is paid.
+ * - History: kHistoryRows sold rows per item at the snapshot price (seller and buyer 0),
+ *   so the AH price history shows the price. Spaced by the item's sales rate; real
+ *   sales are newer and push them out of the 10 the client is sent.
  * - Buyout: a player listing priced at or below the snapshot price is bought by
  *   kMarketName shortly after it is put up. Marking the row sold fires the
  *   auction_house_buy trigger, which sends the gil to the seller's delivery box,
- *   exactly like a sale to another player.
+ *   exactly like a sale to another player (and custom.AUCTION_GIL_TO_INVENTORY then
+ *   moves it into their gil).
  *
  * Items missing from the snapshot (or with no price) are never bought or stocked.
  * See modules/bots/README.md, "Market".
@@ -21,6 +25,7 @@
 #include "common/database.h"
 #include "common/earth_time.h"
 #include "common/logging.h"
+#include "common/settings.h"
 
 #include "map/entities/char_entity.h"
 #include "map/enums/chat_message_type.h"
@@ -39,17 +44,38 @@ namespace
 // Shown as the seller of stocked listings and the buyer of bought ones (AH history).
 constexpr auto kMarketName = "Market";
 
-// Cap on stocked listings per item and stack size (the snapshot's stock can be large).
+// Stocked listings per item and stack size: the snapshot's stock, clamped to this range.
+// Every priced item has sold at some point, so even out-of-stock ones get kMinListings.
+constexpr uint32 kMinListings = 5;
 constexpr uint32 kMaxListings = 10;
+
+// Fake sales per item and stack size. The client's history shows the last 10.
+constexpr uint32 kHistoryRows = 10;
+
+// Spacing of fake sales: one per (1 / sold-per-day) days, within these bounds (seconds).
+constexpr uint32 kHistoryMinGap = 3600;
+constexpr uint32 kHistoryMaxGap = 7 * 86400;
+
+// Stocked listings are dated here (2096) so the search server's EXPIRE_DAYS never sends
+// them "back" to seller 0 (a delivery box row for charid 0). `date` is only used for that.
+constexpr uint32 kNeverExpires = 4000000000;
+
+// Upkeep walks the item ids in windows of this size, one window per time server tick,
+// so every query only touches a few hundred items (5-15 ms) and a full cycle over all
+// 65536 ids takes ~5 min. Whole-table queries took 140-480 ms on the main thread.
+constexpr uint32 kWindow   = 512;
+constexpr uint32 kMaxItems = 65536;
+
+// Most rows one step writes per tick. A window that hits it is redone on the next tick
+// (a fresh snapshot writes ~200k rows).
+constexpr uint32 kChunk = 2000;
 
 // A player listing must have been up this long before the market buys it, so the
 // sale shows up as a sale rather than looking like the listing failed.
 constexpr uint32 kBuyoutDelaySeconds = 10;
 
 // Time server ticks are 2.4 s.
-constexpr uint32 kBuyoutEveryNTicks  = 2;   // ~5 s
-constexpr uint32 kRestockEveryNTicks = 125; // ~5 min
-constexpr uint32 kRefreshEveryNTicks = 750; // ~30 min
+constexpr uint32 kBuyoutEveryNTicks = 2; // ~5 s
 
 struct Sold
 {
@@ -81,16 +107,23 @@ public:
                          "PRIMARY KEY (`itemid`, `stack`)"
                          ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
-        ShowInfo("bot_market: module loaded");
+        ShowInfoFmt("bot_market: module loaded ({})", settings::get<bool>("custom.BOT_MARKET") ? "enabled" : "disabled by custom.BOT_MARKET");
     }
 
     void OnTimeServerTick() override
     {
+        // settings/default/custom.lua; false = vanilla AH (nothing stocked, nothing bought)
+        if (!settings::get<bool>("custom.BOT_MARKET"))
+        {
+            return;
+        }
+
         ++tick_;
 
-        if (tick_ == 1 || tick_ % kRestockEveryNTicks == 0)
+        // Advance to the next window unless this one hit kChunk and has more to write.
+        if (!restock(cursor_, cursor_ + kWindow))
         {
-            restock(tick_ == 1 || tick_ % kRefreshEveryNTicks == 0);
+            cursor_ = (cursor_ + kWindow) % kMaxItems;
         }
 
         if (tick_ % kBuyoutEveryNTicks == 0)
@@ -101,41 +134,118 @@ public:
 
 private:
     uint32 tick_{ 0 };
+    uint32 cursor_{ 0 }; // first item id of the next upkeep window
 
-    void restock(const bool refreshDates)
+    // Upkeep for items lo <= itemid < hi, each step capped at kChunk rows. Returns true if
+    // a step hit the cap, i.e. the window has more to do. The itemid range lets every
+    // step use idx_ah_active (buyer_name, itemid, ...) or idx_ah_history (itemid, ...).
+    auto restock(const uint32 lo, const uint32 hi) -> bool
     {
-        const auto now = earth_time::timestamp();
+        const auto now  = earth_time::timestamp();
+        bool       more = false;
+
+        // db::preparedStmt checks its query at compile time, so each step calls it directly.
+        const auto done = [&](const char* what, const auto& rset) -> uint64
+        {
+            const auto affected = rset ? rset->rowsAffected() : 0;
+            more                = more || affected >= kChunk;
+            if (affected > 0)
+            {
+                ShowInfoFmt("bot_market: {} {} rows", what, affected);
+            }
+            return affected;
+        };
 
         // Stocked listings whose price no longer matches the snapshot (or whose item left it).
-        db::preparedStmt("DELETE ah FROM auction_house ah "
-                         "LEFT JOIN bot_market_prices p ON p.itemid = ah.itemid AND p.stack = ah.stack "
-                         "WHERE ah.seller = 0 AND ah.buyer_name IS NULL AND (p.itemid IS NULL OR p.price = 0 OR ah.price != p.price)");
-
-        // The search server sends listings older than EXPIRE_DAYS back to their seller; for
-        // seller 0 that would be a delivery box row for charid 0. Keep them fresh instead.
-        if (refreshDates)
         {
-            db::preparedStmt("UPDATE auction_house SET date = ? WHERE seller = 0 AND buyer_name IS NULL", now);
+            done("removed stale listings:",
+                db::preparedStmt("DELETE FROM auction_house WHERE id IN (SELECT id FROM ("
+                                 "  SELECT ah.id FROM auction_house ah "
+                                 "  LEFT JOIN bot_market_prices p ON p.itemid = ah.itemid AND p.stack = ah.stack "
+                                 "  WHERE ah.buyer_name IS NULL AND ah.itemid >= ? AND ah.itemid < ? AND ah.seller = 0 "
+                                 "    AND (p.itemid IS NULL OR p.price = 0 OR ah.price != p.price) "
+                                 "  LIMIT ?) t)",
+                                 lo,
+                                 hi,
+                                 kChunk));
+
+            // Fake sales (seller and buyer both 0) at an old price. Real sales are never touched:
+            // a player buying stock has buyer != 0, a buyout has seller != 0.
+            done("removed stale history:",
+                db::preparedStmt("DELETE FROM auction_house WHERE id IN (SELECT id FROM ("
+                                 "  SELECT ah.id FROM auction_house ah "
+                                 "  LEFT JOIN bot_market_prices p ON p.itemid = ah.itemid AND p.stack = ah.stack "
+                                 "  WHERE ah.itemid >= ? AND ah.itemid < ? AND ah.seller = 0 AND ah.buyer = 0 AND ah.buyer_name IS NOT NULL "
+                                 "    AND (p.itemid IS NULL OR p.price = 0 OR ah.sale != p.price) "
+                                 "  LIMIT ?) t)",
+                                 lo,
+                                 hi,
+                                 kChunk));
+
+            // Listings stocked before kNeverExpires existed.
+            done("un-expired listings:",
+                db::preparedStmt("UPDATE auction_house SET date = ? "
+                                 "WHERE buyer_name IS NULL AND itemid >= ? AND itemid < ? AND seller = 0 AND date < ? LIMIT ?",
+                                 kNeverExpires,
+                                 lo,
+                                 hi,
+                                 kNeverExpires,
+                                 kChunk));
         }
 
-        // Top every item up to min(stock, kMaxListings). seq_0_to_255 is MariaDB's sequence engine.
-        const auto rset = db::preparedStmt("INSERT INTO auction_house (itemid, stack, seller, seller_name, date, price) "
-                                           "SELECT p.itemid, p.stack, 0, ?, ?, p.price "
-                                           "FROM bot_market_prices p "
-                                           "JOIN item_basic ib ON ib.itemid = p.itemid AND ib.aH > 0 AND (p.stack = 0 OR ib.stackSize > 1) "
-                                           "LEFT JOIN (SELECT itemid, stack, COUNT(*) AS n FROM auction_house "
-                                           "           WHERE seller = 0 AND buyer_name IS NULL GROUP BY itemid, stack) a "
-                                           "       ON a.itemid = p.itemid AND a.stack = p.stack "
-                                           "JOIN seq_0_to_255 s ON s.seq >= COALESCE(a.n, 0) AND s.seq < LEAST(p.stock, ?) "
-                                           "WHERE p.price > 0",
-                                           kMarketName,
-                                           now,
-                                           kMaxListings);
+        // Top every item up to clamp(stock, kMinListings, kMaxListings). seq_0_to_255 is
+        // MariaDB's sequence engine: one row per listing still missing.
+        done("stocked listings:",
+            db::preparedStmt("INSERT INTO auction_house (itemid, stack, seller, seller_name, date, price) "
+                             "SELECT p.itemid, p.stack, 0, ?, ?, p.price "
+                             "FROM bot_market_prices p "
+                             "JOIN item_basic ib ON ib.itemid = p.itemid AND ib.aH > 0 AND (p.stack = 0 OR ib.stackSize > 1) "
+                             "LEFT JOIN (SELECT itemid, stack, COUNT(*) AS n FROM auction_house "
+                             "           WHERE buyer_name IS NULL AND itemid >= ? AND itemid < ? AND seller = 0 GROUP BY itemid, stack) a "
+                             "       ON a.itemid = p.itemid AND a.stack = p.stack "
+                             "JOIN seq_0_to_255 s ON s.seq >= COALESCE(a.n, 0) AND s.seq < GREATEST(?, LEAST(p.stock, ?)) "
+                             "WHERE p.itemid >= ? AND p.itemid < ? AND p.price > 0 "
+                             "LIMIT ?",
+                             kMarketName,
+                             kNeverExpires,
+                             lo,
+                             hi,
+                             kMinListings,
+                             kMaxListings,
+                             lo,
+                             hi,
+                             kChunk));
 
-        if (rset && rset->rowsAffected() > 0)
+        // Top every item up to kHistoryRows fake sales at the snapshot price, the n-th one
+        // n gaps before now. A refilled row continues from the oldest existing one.
         {
-            ShowInfoFmt("bot_market: stocked {} auction house listings", rset->rowsAffected());
+            done("added history:",
+                db::preparedStmt("INSERT INTO auction_house (itemid, stack, seller, seller_name, date, price, buyer, buyer_name, sale, sell_date) "
+                                 "SELECT g.itemid, g.stack, 0, ?, g.t, g.price, 0, ?, g.price, g.t FROM ("
+                                 "  SELECT p.itemid, p.stack, p.price, "
+                                 "         CAST(? - (s.seq + 1) * LEAST(GREATEST(FLOOR(86400 / GREATEST(p.rate, 0.01)), ?), ?) AS UNSIGNED) AS t "
+                                 "FROM bot_market_prices p "
+                                 "JOIN item_basic ib ON ib.itemid = p.itemid AND ib.aH > 0 AND (p.stack = 0 OR ib.stackSize > 1) "
+                                 "LEFT JOIN (SELECT itemid, stack, COUNT(*) AS n FROM auction_house "
+                                 "           WHERE itemid >= ? AND itemid < ? AND seller = 0 AND buyer = 0 AND buyer_name IS NOT NULL GROUP BY itemid, stack) h "
+                                 "       ON h.itemid = p.itemid AND h.stack = p.stack "
+                                 "  JOIN seq_0_to_255 s ON s.seq >= COALESCE(h.n, 0) AND s.seq < ? "
+                                 "  WHERE p.itemid >= ? AND p.itemid < ? AND p.price > 0 "
+                                 "  LIMIT ?) g",
+                                 kMarketName,
+                                 kMarketName,
+                                 now,
+                                 kHistoryMinGap,
+                                 kHistoryMaxGap,
+                                 lo,
+                                 hi,
+                                 kHistoryRows,
+                                 lo,
+                                 hi,
+                                 kChunk));
         }
+
+        return more;
     }
 
     void buyout()
@@ -184,7 +294,8 @@ private:
 
             ShowInfoFmt("bot_market: bought {}{} from charid {} for {} gil", name, sold.stack ? " (stack)" : "", sold.seller, sold.price);
 
-            if (CCharEntity* PChar = zoneutils::GetChar(sold.seller))
+            // With custom.AUCTION_GIL_TO_INVENTORY, ah_gil_to_inventory pays and tells the seller.
+            if (CCharEntity* PChar = zoneutils::GetChar(sold.seller); PChar && !settings::get<bool>("custom.AUCTION_GIL_TO_INVENTORY"))
             {
                 PChar->pushPacket<GP_SERV_COMMAND_CHAT_STD>(PChar,
                                                             MESSAGE_SYSTEM_1,

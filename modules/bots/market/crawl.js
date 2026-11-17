@@ -7,7 +7,7 @@
 //                     ~65 requests. Saves the queue for step 2 in localStorage.
 // 2. mktSales()       item pages, busiest items first -> lowest sale price in the shown history.
 //                     ~13k requests (~3.7 h). Resumable: progress is kept in localStorage.
-//                     window.__crawl shows progress; set window.__crawl.running = false to stop.
+//                     window.__crawl shows progress; window.__worker.terminate() stops it.
 // 3. await mktExport('browse') / await mktExport('sales')
 //                     returns 'BEGIN<base64 gzip>END'; decode with
 //                     python modules/bots/market/load_snapshot.py import-browse|import-sales <file>
@@ -52,34 +52,48 @@ async function mktBrowse() {
     return rows.length;
 }
 
-async function mktSales() {
-    window.__crawl = { done: 0, err: 0, running: true, last: null };
+// Runs in a Web Worker: a hidden tab throttles page timers to ~1 per 2 s, worker timers it doesn't.
+// One request per second. ffxiah rate-limits (HTTP 429) at not much more than that: 16 parallel
+// workers were cut off within 20 s. On 429/403/5xx the worker waits a minute and retries.
+const MKT_WORKER = `
+onmessage = async (e) => {
+  const { origin, todo } = e.data;
+  for (let i = 0; i < todo.length; i++) {
+    const [id, stack] = todo[i];
+    const t0 = Date.now();
+    try {
+      const r = await fetch(origin + '/item/' + id + (stack ? '?stack=1' : ''), { credentials: 'include' });
+      if (r.status === 429 || r.status === 403 || r.status >= 500) { postMessage({ throttled: r.status }); await new Promise(s => setTimeout(s, 60000)); i--; continue; }
+      const m = (await r.text()).match(/Item\.sales\s*=\s*(\[.*?\]);/s);
+      const sales = m ? JSON.parse(m[1]) : [];
+      const prices = sales.map(s => Number(s.price)).filter(p => p > 0);
+      const times = sales.map(s => Number(s.saleon));
+      // lowest sale, number of sales shown, newest and oldest sale (unix time)
+      postMessage({ key: id + ':' + stack, v: prices.length ? [Math.min(...prices), prices.length, Math.max(...times), Math.min(...times)] : [0, 0, 0, 0] });
+    } catch (err) { postMessage({ err: String(err) }); }
+    const wait = 1000 - (Date.now() - t0);
+    if (wait > 0) await new Promise(s => setTimeout(s, wait));
+  }
+  postMessage({ finished: true });
+};`;
+
+function mktSales() {
     const q = JSON.parse(localStorage.getItem('mkt_queue'));
     const res = JSON.parse(localStorage.getItem('mkt_res') || '{}');
-    let sinceSave = 0;
-    for (const [id, stack] of q) {
-        if (!window.__crawl.running) break;
-        const key = id + ':' + stack;
-        if (res[key]) { window.__crawl.done++; continue; }
-        const t0 = Date.now();
-        try {
-            const r = await fetch('/item/' + id + (stack ? '?stack=1' : ''));
-            if (r.status === 429 || r.status === 403) { window.__crawl.last = 'HTTP ' + r.status; await mktSleep(60000); continue; }
-            const m = (await r.text()).match(/Item\.sales\s*=\s*(\[.*?\]);/s);
-            const sales = m ? JSON.parse(m[1]) : [];
-            const prices = sales.map(s => Number(s.price)).filter(p => p > 0);
-            const times = sales.map(s => Number(s.saleon));
-            // lowest sale, number of sales shown, newest and oldest sale (unix time)
-            res[key] = prices.length ? [Math.min(...prices), prices.length, Math.max(...times), Math.min(...times)] : [0, 0, 0, 0];
-            window.__crawl.done++;
-            window.__crawl.last = key;
-        } catch (e) { window.__crawl.err++; window.__crawl.last = 'ERR ' + e; }
-        if (++sinceSave >= 25) { localStorage.setItem('mkt_res', JSON.stringify(res)); sinceSave = 0; }
-        const wait = 1000 - (Date.now() - t0);
-        if (wait > 0) await mktSleep(wait);
-    }
-    localStorage.setItem('mkt_res', JSON.stringify(res));
-    window.__crawl.running = false;
+    const todo = q.filter(([id, s]) => !res[id + ':' + s]);
+    window.__crawl = { done: q.length - todo.length, total: q.length, err: 0, throttled: 0, finished: false };
+    let unsaved = 0;
+    const w = new Worker(URL.createObjectURL(new Blob([MKT_WORKER], { type: 'text/javascript' })));
+    window.__worker = w; // window.__worker.terminate() to stop; progress is saved every 25 items
+    w.onmessage = (e) => {
+        const d = e.data;
+        if (d.key) { res[d.key] = d.v; window.__crawl.done++; if (++unsaved >= 25) { localStorage.setItem('mkt_res', JSON.stringify(res)); unsaved = 0; } }
+        else if (d.err) window.__crawl.err++;
+        else if (d.throttled) window.__crawl.throttled++;
+        else if (d.finished) { localStorage.setItem('mkt_res', JSON.stringify(res)); window.__crawl.finished = true; }
+    };
+    w.postMessage({ origin: location.origin, todo });
+    return todo.length;
 }
 
 async function mktExport(which) {
