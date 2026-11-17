@@ -128,6 +128,16 @@ xi.settings.custom =
     -- only the bonus, Hachirin-no-Obi forces both).
     DAY_WEATHER_ALWAYS = true,
 
+    -- Elemental damage rate by the target's resistance rank (the table is in
+    -- scripts/globals/spells/damage_spell.lua):
+    --   rank -3: x1.5   -2: x1.25   -1..1: x1   2: x0.75   3..5: x0.5   6..11: x0.25
+    -- Weak elements now do extra damage. Rank 11 nukes roll resists like rank 10 instead of an
+    -- automatic 1/4 (status effects stay immune). Magic evasion from the rank is unchanged.
+    -- Used by nukes, blue magic, Drain/Aspir, Quick Draw, additional effects and spikes.
+    -- Subtle Sorcery ignores the reductions, not the bonuses.
+    -- false = vanilla (x0.5 at rank 4+, nukes at rank 11 always 1/4).
+    RESIST_RANK_DAMAGE_RATE = true,
+
     -- --------------------------------
     -- Shops
     -- --------------------------------

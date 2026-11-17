@@ -571,9 +571,12 @@ xi.combat.magicHitRate.calculateResistRate = function(actor, target, fedData)
     if params.resistanceRank >= 11 then
         if params.effectId > 0 then
             return 0    -- Status Effects
-        else
+        elseif not (xi.settings.custom and xi.settings.custom.RESIST_RANK_DAMAGE_RATE) then
             return 0.25 -- Nukes
         end
+
+        -- CUSTOM (custom.RESIST_RANK_DAMAGE_RATE): rank 11's damage cut is in the rank damage
+        -- rate table (damage_spell.lua), so nukes roll resists like rank 10 instead.
     end
 
     -- Early return: MHR is floored to 0.05. Skip calculating it.

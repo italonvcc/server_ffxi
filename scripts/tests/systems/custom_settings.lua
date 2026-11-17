@@ -778,7 +778,7 @@ describe('Custom !resist command', function()
         sendChat(string.format('!resist %d', mob:getID()))
         local lines = resistLines()
 
-        assert(#lines == 5, string.format('Expected 5 lines, got %d: %s', #lines, table.concat(lines, ' | ')))
+        assert(#lines == 6, string.format('Expected 6 lines, got %d: %s', #lines, table.concat(lines, ' | ')))
         assert(string.find(lines[1], string.format('[RES] %d H lv=', mob:getID()), 1, true), 'Bad header: ' .. lines[1])
         assert(string.find(lines[1], 'name=Volcanic_Bomb', 1, true), 'Missing name: ' .. lines[1])
         -- Bomb resistances (mob_resistances 56): fire rank -3, every other element rank 4
@@ -796,7 +796,7 @@ describe('Custom !resist command', function()
         sendChat(string.format('!resist %d', mob:getID()))
         local lines = resistLines()
         assert(lines[4] and string.find(lines[4], 'D fire=100 ice=100', 1, true), 'Bad day/weather line: ' .. tostring(lines[4]))
-        assert(lines[5] and string.find(lines[5], 'M dw=0 fire=100 ice=50 ', 1, true), 'Bad multiplier line: ' .. tostring(lines[5]))
+        assert(lines[6] and string.find(lines[6], 'M dw=0 fire=100 ice=50 ', 1, true), 'Bad multiplier line: ' .. tostring(lines[6]))
     end)
 
     it('RESIST_COMMAND + DAY_WEATHER_ALWAYS: multipliers include day and weather', function()
@@ -810,11 +810,46 @@ describe('Custom !resist command', function()
         -- Wind is untouched.
         assert(lines[4] and string.find(lines[4], 'D fire=135 ice=65 wind=100', 1, true), 'Bad day/weather line: ' .. tostring(lines[4]))
         -- Bomb: fire rank -3 (no cut), ice rank 4 (x0.5): 0.5 x 0.65 = 0.325
-        assert(lines[5] and string.find(lines[5], 'M dw=1 fire=135 ice=33 wind=50', 1, true), 'Bad multiplier line: ' .. tostring(lines[5]))
+        assert(lines[6] and string.find(lines[6], 'M dw=1 fire=135 ice=33 wind=50', 1, true), 'Bad multiplier line: ' .. tostring(lines[6]))
 
         for _, line in ipairs(lines) do
             assert(#line < 150, string.format('Line over the chat limit (%d bytes): %s', #line, line))
         end
+    end)
+
+    it('RESIST_COMMAND + RESIST_RANK_DAMAGE_RATE: multipliers use the rank damage rates', function()
+        xi.test.world:setSetting('custom.RESIST_COMMAND', true)
+        xi.test.world:setSetting('custom.RESIST_RANK_DAMAGE_RATE', true)
+        sendChat(string.format('!resist %d', mob:getID()))
+        local lines = resistLines()
+        -- Bomb: fire rank -3 -> x1.5, the rest rank 4 -> x0.5
+        assert(lines[6] and string.find(lines[6], 'M dw=0 fire=150 ice=50 ', 1, true), 'Bad multiplier line: ' .. tostring(lines[6]))
+    end)
+
+    it('RESIST_COMMAND: prints the melee hit chance', function()
+        xi.test.world:setSetting('custom.RESIST_COMMAND', true)
+        sendChat(string.format('!resist %d', mob:getID()))
+        local lines = resistLines()
+        local main = lines[5] and tonumber(string.match(lines[5], '^%[RES%] %d+ P main=(%d+)'))
+        assert(main and main >= 20 and main <= 99, 'Bad hit line: ' .. tostring(lines[5]))
+        local expected = math.floor(xi.combat.physicalHitRate.getPhysicalHitRate(player, mob, 0, xi.attackAnimation.RIGHT_ATTACK, false) * 100)
+        assert(main == expected, string.format('Expected %d, got %d', expected, main))
+    end)
+
+    it('RESIST_COMMAND: the hit chance includes accuracy buffs', function()
+        xi.test.world:setSetting('custom.RESIST_COMMAND', true)
+        -- A level 75 character, so the hit chance is between the 20% floor and the 99% cap
+        player = xi.test.world:spawnPlayer({ zone = xi.zone.IFRITS_CAULDRON, level = 75 })
+        player.packets:clear()
+        sendChat(string.format('!resist %d', mob:getID()))
+        local before = tonumber(string.match(resistLines()[5] or '', 'main=(%d+)'))
+
+        player:addMod(xi.mod.ACC, 400)
+        player.packets:clear()
+        sendChat(string.format('!resist %d', mob:getID()))
+        local after = tonumber(string.match(resistLines()[5] or '', 'main=(%d+)'))
+
+        assert(before and after and after > before, string.format('Expected more hit chance with +400 accuracy: %s -> %s', tostring(before), tostring(after)))
     end)
 
     it('RESIST_COMMAND: shows a live absorb mod', function()
@@ -871,5 +906,73 @@ describe('Custom day and weather always apply', function()
         local seen = results(50)
         -- Fire on Watersday in rain: 1 - 0.10 - 0.10
         assert(seen['0.80'] and not seen['1.00'], 'Expected 0.80 on every cast')
+    end)
+end)
+
+describe('Custom resistance rank damage rates', function()
+    local player
+    local mob
+
+    before_each(function()
+        player = xi.test.world:spawnPlayer({ zone = xi.zone.IFRITS_CAULDRON })
+        mob    = player.entities:get('Volcanic_Bomb')
+        mob:respawn()
+    end)
+
+    local function rate(rank)
+        mob:setMod(xi.mod.FIRE_RES_RANK, rank)
+        return xi.spells.damage.calculateAdditionalResistTier(player, mob, xi.element.FIRE)
+    end
+
+    it('vanilla: x0.5 from rank 4, nothing below', function()
+        assert(rate(-3) == 1 and rate(2) == 1 and rate(3) == 1, 'Expected x1 below rank 4')
+        assert(rate(4) == 0.5 and rate(11) == 0.5, 'Expected x0.5 from rank 4')
+    end)
+
+    it('RESIST_RANK_DAMAGE_RATE: the rank damage rate table', function()
+        xi.test.world:setSetting('custom.RESIST_RANK_DAMAGE_RATE', true)
+        local expected =
+        {
+            [-3] = 1.5, [-2] = 1.25, [-1] = 1, [0] = 1, [1] = 1, [2] = 0.75, [3] = 0.5, [4] = 0.5,
+            [5] = 0.5, [6] = 0.25, [7] = 0.25, [8] = 0.25, [9] = 0.25, [10] = 0.25, [11] = 0.25,
+        }
+        for rank = -3, 11 do
+            local got = rate(rank)
+            assert(got == expected[rank], string.format('Rank %d: expected %s, got %s', rank, expected[rank], got))
+        end
+    end)
+
+    it('RESIST_RANK_DAMAGE_RATE: Subtle Sorcery ignores the reduction, keeps the bonus', function()
+        xi.test.world:setSetting('custom.RESIST_RANK_DAMAGE_RATE', true)
+        player:addStatusEffect(xi.effect.SUBTLE_SORCERY, { power = 1, duration = 60, origin = player })
+        assert(rate(6) == 1, 'Expected x1 at rank 6 with Subtle Sorcery')
+        assert(rate(-3) == 1.5, 'Expected x1.5 at rank -3 with Subtle Sorcery')
+    end)
+
+    describe('rank 11 nukes', function()
+        local function resist()
+            mob:setMod(xi.mod.FIRE_RES_RANK, 11)
+            return xi.combat.magicHitRate.calculateResistRate(player, mob, { magicalElement = xi.element.FIRE, skillType = xi.skill.ELEMENTAL_MAGIC })
+        end
+
+        before_each(function()
+            stub('math.randomFloat', 0) -- every resist roll lands
+        end)
+
+        it('vanilla: always 1/4', function()
+            assert(resist() == 0.25, 'Expected an automatic 1/4')
+        end)
+
+        it('RESIST_RANK_DAMAGE_RATE: roll resists like rank 10', function()
+            xi.test.world:setSetting('custom.RESIST_RANK_DAMAGE_RATE', true)
+            assert(resist() == 1, 'Expected an unresisted roll')
+        end)
+
+        it('status effects stay immune either way', function()
+            xi.test.world:setSetting('custom.RESIST_RANK_DAMAGE_RATE', true)
+            mob:setMod(xi.mod.FIRE_RES_RANK, 11)
+            local r = xi.combat.magicHitRate.calculateResistRate(player, mob, { magicalElement = xi.element.FIRE, effectId = xi.effect.BURN })
+            assert(r == 0, 'Expected immunity, got ' .. tostring(r))
+        end)
     end)
 end)

@@ -7,9 +7,14 @@ change the addon sends "!resist <mobId>", hides the [RES] reply lines from the c
 draws them in a text box.
 
 Each element shows the fixed damage multiplier your nukes take on that mob: elemental damage
-taken x the 1/2 (rank 4+) or 1/8 (rank 11) cut x magic damage taken x day/weather with your
-gear (obis, Iridescence, Twilight Cape, Zodiac Ring). Not included: resists rolled from hit
-rate, MAB vs MDB, Magic Burst. The rank label says how the rank moves the hit rate.
+taken x the rank's damage rate (custom.RESIST_RANK_DAMAGE_RATE table, or retail's 1/2 at rank
+4+) x magic damage taken x day/weather with your gear (obis, Iridescence, Twilight Cape, Zodiac
+Ring). Not included: resists rolled from hit rate, MAB vs MDB, Magic Burst. The rank label says
+how the rank moves the spell hit rate.
+
+"Melee hit" is your auto-attack hit chance on the mob (main hand, and off hand when dual
+wielding), from the same server code as real swings: gear, food, every buff, level difference.
+It is re-read when you gain or lose a buff; use //resist after changing gear.
 
 Install: copy this folder to <Windower>/addons/resist and run "//lua load resist".
 Commands:
@@ -20,7 +25,7 @@ Commands:
 
 _addon.name     = 'resist'
 _addon.author   = 'server_ffxi'
-_addon.version  = '1.0'
+_addon.version  = '1.1'
 _addon.commands = { 'resist' }
 
 local config = require('config')
@@ -66,11 +71,11 @@ local function c(color, s)
     return string.format('\\cs(%s)%s\\cr', color, s)
 end
 
--- What a resistance rank does to the hit rate (scripts/combat/basic/magic_hit_rate.lua).
--- Its fixed damage cut (1/2 at rank 4+, 1/8 at rank 11) is already in the multiplier.
+-- What a resistance rank does to the spell hit rate (scripts/combat/basic/magic_hit_rate.lua).
+-- Its damage rate is already in the multiplier.
 local function describeRank(rank)
-    if rank >= 11 then
-        return c('255,80,80', 'auto-resist')
+    if rank >= 10 then
+        return c('255,80,80', 'almost always resisted')
     elseif rank >= 1 then
         return c('230,230,120', 'resists more')
     elseif rank == 0 then
@@ -111,7 +116,27 @@ local function render()
         table.insert(lines, string.format('%s  Lv%s', name, h.lv or '?'))
 
         local magicTaken = 100 + (tonumber(h.mdt) or 0) / 100 + (tonumber(h.umdt) or 0) / 100
-        table.insert(lines, string.format('MEVA %s  MDB %s  Magic dmg %d%%', h.meva or '?', h.mdb or '?', magicTaken))
+        table.insert(lines, string.format('MDB %s  Magic dmg %d%%', h.mdb or '?', magicTaken))
+
+        if data.hit and data.hit.main then
+            local function pct(v)
+                local s = string.format('%d%%', v)
+                if v >= 90 then
+                    return c('120,255,120', s)
+                elseif v < 75 then
+                    return c('255,120,120', s)
+                end
+
+                return s
+            end
+
+            local hitLine = 'Melee hit ' .. pct(data.hit.main)
+            if data.hit.off then
+                hitLine = hitLine .. '  off-hand ' .. pct(data.hit.off)
+            end
+
+            table.insert(lines, hitLine)
+        end
 
         if (tonumber(h.mabs) or 0) > 0 then
             table.insert(lines, c('255,80,80', string.format('Absorbs all magic %s%%', h.mabs)))
@@ -138,10 +163,6 @@ local function render()
 
                 if v.sdt ~= 0 then
                     table.insert(parts, string.format('elem dmg %d%%', 100 + v.sdt / 100))
-                end
-
-                if v.meva ~= 0 then
-                    table.insert(parts, string.format('meva %+d', v.meva))
                 end
 
                 if v.absorb > 0 then
@@ -206,7 +227,7 @@ local function parse(text)
         return
     end
 
-    local id, kind, rest = text:match('%[RES%] (%d+) ([HEDM]) (.+)')
+    local id, kind, rest = text:match('%[RES%] (%d+) ([HEDMP]) (.+)')
     id = tonumber(id)
     if not id then
         return
@@ -216,7 +237,13 @@ local function parse(text)
     cache[id]   = entry
     entry.time  = os.clock()
 
-    if kind == 'D' or kind == 'M' then
+    if kind == 'P' then
+        entry.hit =
+        {
+            main = tonumber(rest:match('main=(%d+)')),
+            off  = tonumber(rest:match('off=(%d+)')),
+        }
+    elseif kind == 'D' or kind == 'M' then
         local values = {}
         for key, pct in rest:gmatch('(%a+)=(%-?%d+)') do
             values[key] = tonumber(pct)
@@ -233,6 +260,7 @@ local function parse(text)
         entry.elements = {}
         entry.dw       = nil
         entry.mult     = nil
+        entry.hit      = nil
         -- The client may append control characters to system lines
         local name = (rest:match('name=([^%c]+)') or '?')
         for k, v in rest:gmatch('(%w+)=(%-?%d+)') do
@@ -332,6 +360,16 @@ windower.register_event('prerender', function()
         pending  = nil
     end
 end)
+
+-- Buffs change accuracy (and Subtle Sorcery the multipliers): re-read the current target.
+local function refreshCurrent()
+    if currentId then
+        queue(currentId, true)
+    end
+end
+
+windower.register_event('gain buff', refreshCurrent)
+windower.register_event('lose buff', refreshCurrent)
 
 windower.register_event('zone change', function()
     cache     = {}
