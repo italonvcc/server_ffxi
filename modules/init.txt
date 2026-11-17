@@ -41,3 +41,14 @@
 custom/lua/test_npcs_in_gm_home.lua
 
 bots
+
+custom/cpp/ah_gil_to_inventory.cpp
+custom/lua/nomad_moogles.lua
+custom/lua/city_teleporter.lua
+custom/lua/inventory_size.lua
+custom/lua/permanent_buffs.lua
+custom/lua/home_command.lua
+custom/lua/resist_command.lua
+custom/lua/out_of_combat_regen.lua
+custom/lua/custom_spells.lua
+custom/lua/enspell_element_strikes.lua

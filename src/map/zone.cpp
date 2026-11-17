@@ -322,6 +322,11 @@ auto CZone::CanUseMisc(xi::ZoneMisc misc) const -> bool
     return (m_miscMask & misc) == misc;
 }
 
+void CZone::AddMisc(xi::ZoneMisc misc)
+{
+    m_miscMask = m_miscMask | misc;
+}
+
 auto CZone::GetZoneLine(uint32 zoneLineID) -> zoneLine_t*
 {
     const auto it = std::ranges::find(m_zoneLineList, zoneLineID, &zoneLine_t::zoneLineId);

@@ -1353,6 +1353,21 @@ inline auto GetAccFromSkill(uint32 skill) -> uint32
     return accuracy;
 }
 
+// Fork setting (settings/default/custom.lua): characters' accuracy from combat skill is
+// multiplied by custom.WEAPON_SKILL_ACCURACY_MULTIPLIER (1.0 = vanilla). Melee and ranged.
+inline auto GetCharAccFromSkill(uint32 skill) -> uint32
+{
+    const auto multiplier = settings::get<double>("custom.WEAPON_SKILL_ACCURACY_MULTIPLIER");
+    const auto accuracy   = GetAccFromSkill(skill);
+
+    if (multiplier <= 0.0 || multiplier == 1.0)
+    {
+        return accuracy;
+    }
+
+    return static_cast<uint32>(std::floor(accuracy * multiplier));
+}
+
 } // namespace
 
 auto CBattleEntity::RACC(uint16 bonusAcc) -> uint16
@@ -1405,7 +1420,7 @@ auto CBattleEntity::RACC(uint16 bonusAcc) -> uint16
             return 0;
         }
 
-        RACC = GetAccFromSkill(skillLevel);
+        RACC = GetCharAccFromSkill(skillLevel);
 
         RACC += getMod(xi::Mod::RACC);
         RACC += bonusAcc;
@@ -1542,7 +1557,7 @@ auto CBattleEntity::ACC(uint8 attackNumber, uint16 offsetAccuracy) -> uint16
         }
         else
         {
-            ACC = GetAccFromSkill(GetSkill(skill) + iLvlSkill);
+            ACC = GetCharAccFromSkill(GetSkill(skill) + iLvlSkill);
         }
 
         if (auto* weapon = dynamic_cast<CItemWeapon*>(m_Weapons[SLOT_MAIN]); weapon && weapon->isTwoHanded())
@@ -3887,6 +3902,23 @@ auto CBattleEntity::OnAttack(CAttackState& state, action_t& action) -> bool
         if (actionResult.resolution == ActionResolution::Miss && actionResult.messageID != MsgBasic::ShadowAbsorb)
         {
             actionResult.param = 0;
+        }
+
+        // Fork setting (settings/default/custom.lua): a swing that does no damage (miss, parry,
+        // shadow, anticipate, counter) still rolls a weapon skill-up, like a hit does in CAttack::ProcessDamage.
+        if (actionResult.resolution == ActionResolution::Miss || actionResult.resolution == ActionResolution::Parry)
+        {
+            if (auto* PChar = dynamic_cast<CCharEntity*>(this); PChar && settings::get<bool>("custom.SKILLUP_ON_MISS"))
+            {
+                if (attack.GetAttackType() == PHYSICAL_ATTACK_TYPE::DAKEN)
+                {
+                    charutils::TrySkillUP(PChar, xi::SkillType::Throwing, PTarget->GetMLevel());
+                }
+                else if (auto* weapon = dynamic_cast<CItemWeapon*>(m_Weapons[attack.GetWeaponSlot()]))
+                {
+                    charutils::TrySkillUP(PChar, weapon->getSkillType(), PTarget->GetMLevel());
+                }
+            }
         }
 
         // Run enspell/spike routines for hit, guard, or block as long as this isn't a Daken swing

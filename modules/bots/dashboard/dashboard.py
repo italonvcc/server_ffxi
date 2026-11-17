@@ -38,6 +38,9 @@ JOBS = [
     "NON", "WAR", "MNK", "WHM", "BLM", "RDM", "THF", "PLD", "DRK", "BST", "BRD", "RNG",
     "SAM", "NIN", "DRG", "SMN", "BLU", "COR", "PUP", "DNC", "SCH", "GEO", "RUN", "MON",
 ]
+# Jobs a bot can be created as (the map server checks this too): the six starting jobs,
+# and BRD, RNG, SAM, NIN, which the bot module gives starting gear
+START_JOBS = (1, 2, 3, 4, 5, 6, 10, 11, 12, 13)
 RACES = {1: "Hume (M)", 2: "Hume (F)", 3: "Elvaan (M)", 4: "Elvaan (F)",
          5: "Tarutaru (M)", 6: "Tarutaru (F)", 7: "Mithra", 8: "Galka"}
 SIZES = {0: "Small", 1: "Medium", 2: "Large"}
@@ -45,13 +48,28 @@ NATIONS = {0: "San d'Oria", 1: "Bastok", 2: "Windurst"}
 EQUIP_SLOTS = ["Main", "Sub", "Ranged", "Ammo", "Head", "Body", "Hands", "Legs", "Feet",
                "Neck", "Waist", "Ear 1", "Ear 2", "Ring 1", "Ring 2", "Back"]
 GIL_ITEM_ID = 65535
+
+# char_skills.skillid (src/map/enums/skill_type.h). Values are stored times ten.
+SKILLS = {
+    1: "Hand-to-Hand", 2: "Dagger", 3: "Sword", 4: "Great Sword", 5: "Axe", 6: "Great Axe",
+    7: "Scythe", 8: "Polearm", 9: "Katana", 10: "Great Katana", 11: "Club", 12: "Staff",
+    25: "Archery", 26: "Marksmanship", 27: "Throwing", 28: "Guard", 29: "Evasion", 30: "Shield",
+    31: "Parrying", 32: "Divine Magic", 33: "Healing Magic", 34: "Enhancing Magic",
+    35: "Enfeebling Magic", 36: "Elemental Magic", 37: "Dark Magic", 38: "Summoning Magic",
+    39: "Ninjutsu", 40: "Singing", 41: "Stringed Instrument", 42: "Wind Instrument",
+    43: "Blue Magic", 44: "Geomancy", 45: "Handbell", 48: "Fishing", 49: "Woodworking",
+    50: "Smithing", 51: "Goldsmithing", 52: "Clothcraft", 53: "Leathercraft", 54: "Bonecraft",
+    55: "Alchemy", 56: "Cooking", 57: "Synergy",
+}
 LOC_INVENTORY = 0
+# LOC_WARDROBE .. LOC_WARDROBE8 (bots keep spare gear there, see stowSpareGear)
+LOC_WARDROBES = (8, 10, 11, 12, 13, 14, 15, 16)
 
 # char_jobs column per job id
 JOB_COLUMNS = {i: name.lower() for i, name in enumerate(JOBS) if i > 0}
 
 NAME_RE = re.compile(r"^[A-Z][a-z]{2,14}$")
-COMMANDS = {"create", "spawn", "despawn", "summon", "autospawn", "delete"}
+COMMANDS = {"create", "spawn", "despawn", "summon", "autospawn", "delete", "invite", "jobs"}
 
 
 def read_credentials():
@@ -111,6 +129,20 @@ def job_level(jobs_row, job_id):
     return jobs_row.get(column, 0) if jobs_row and column else 0
 
 
+def sub_job_level(jobs_row, main_id, sub_id):
+    """The subjob counts for half the main job's level, at least 1."""
+    if not sub_id:
+        return 0
+    return max(1, min(job_level(jobs_row, sub_id), job_level(jobs_row, main_id) // 2))
+
+
+def job_exp(conn, charid, job_id, exp_next):
+    """Exp of the main job (char_exp) and what the next level needs (written by the map server)."""
+    column = JOB_COLUMNS.get(job_id)
+    rows = query(conn, "SELECT * FROM char_exp WHERE charid = ?", (charid,)) if column else []
+    return {"current": rows[0].get(column, 0) if rows else 0, "next": exp_next or None}
+
+
 #
 # Read models
 #
@@ -140,11 +172,17 @@ def get_state(conn):
             "race": RACES.get(b["race"], "?"),
             "job": JOBS[b["mjob"]] if b["mjob"] is not None and b["mjob"] < len(JOBS) else "?",
             "level": job_level(b, b["mjob"]),
+            "sub_job": JOBS[b["sjob"]] if b["sjob"] and b["sjob"] < len(JOBS) else None,
+            "sub_level": sub_job_level(b, b["mjob"], b["sjob"]),
             "zone": (b["zone_name"] or "").replace("_", " "),
             "online": bool(b["online"]),
             "autospawn": bool(b["autospawn"]),
             "hp": b["hp"], "max_hp": b["max_hp"], "mp": b["mp"], "max_mp": b["max_mp"],
             "pos": [round(b["pos_x"], 2), round(b["pos_y"], 2), round(b["pos_z"], 2)],
+            "ai_state": b["ai_state"] if b["online"] else None,
+            "leader": b["leader"] or None,
+            "action": (b.get("action") or None) if b["online"] else None,
+            "exp": job_exp(conn, b["charid"], b["mjob"], b["exp_next"]),
         })
 
     players = query(conn, """
@@ -181,12 +219,13 @@ def get_bot(conn, charid):
     rows = query(conn, """
         SELECT b.*, c.charname, c.nation, c.pos_zone, c.pos_x AS saved_x, c.pos_y AS saved_y, c.pos_z AS saved_z,
                c.playtime, DATE_FORMAT(b.created, '%Y-%m-%d %H:%i') AS created_at,
-               l.race, l.face, l.size, s.mjob, s.sjob, z.name AS zone_name
+               l.race, l.face, l.size, s.mjob, s.sjob, z.name AS zone_name, hz.name AS home_zone_name
         FROM bot_players b
         JOIN chars c ON c.charid = b.charid
         LEFT JOIN char_look l ON l.charid = b.charid
         LEFT JOIN char_stats s ON s.charid = b.charid
         LEFT JOIN zone_settings z ON z.zoneid = c.pos_zone
+        LEFT JOIN zone_settings hz ON hz.zoneid = b.home_zone
         WHERE b.charid = ?
     """, (charid,))
     if not rows:
@@ -199,7 +238,7 @@ def get_bot(conn, charid):
                   for i, col in JOB_COLUMNS.items() if jobs_row.get(col, 0)]
 
     equipment = {r["equipslotid"]: r for r in query(conn, """
-        SELECT e.equipslotid, i.itemId, ib.name
+        SELECT e.equipslotid, e.containerid, e.slotid, i.itemId, ib.name
         FROM char_equip e
         JOIN char_inventory i ON i.charid = e.charid AND i.location = e.containerid AND i.slot = e.slotid
         LEFT JOIN item_basic ib ON ib.itemid = i.itemId
@@ -214,10 +253,33 @@ def get_bot(conn, charid):
         ORDER BY i.slot
     """, (charid, LOC_INVENTORY, GIL_ITEM_ID))
 
+    wardrobe = query(conn, f"""
+        SELECT i.location, i.slot, i.itemId, i.quantity, ib.name
+        FROM char_inventory i
+        LEFT JOIN item_basic ib ON ib.itemid = i.itemId
+        WHERE i.charid = ? AND i.location IN ({", ".join("?" * len(LOC_WARDROBES))})
+        ORDER BY i.location, i.slot
+    """, (charid, *LOC_WARDROBES))
+
     gil = query(conn, "SELECT quantity FROM char_inventory WHERE charid = ? AND itemId = ? LIMIT 1",
                 (charid, GIL_ITEM_ID))
 
-    equipped_slots = {(LOC_INVENTORY, r["itemId"]) for r in equipment.values()}
+    equipped_slots = {(r["containerid"], r["slotid"]) for r in equipment.values()}
+
+    skills = query(conn, "SELECT skillid, value FROM char_skills WHERE charid = ? AND value > 0 ORDER BY skillid",
+                   (charid,))
+
+    spells = query(conn, """
+        SELECT s.spellid, l.name
+        FROM char_spells s
+        LEFT JOIN spell_list l ON l.spellid = s.spellid
+        WHERE s.charid = ?
+        ORDER BY s.spellid
+    """, (charid,))
+
+    # Written by the map server: what the bot can use with the weapons it holds
+    ws_row = query(conn, "SELECT weapon_skills FROM bot_players WHERE charid = ?", (charid,))
+    weapon_skills = [pretty_item(n) for n in (ws_row[0]["weapon_skills"] if ws_row else "").split(",") if n]
 
     return {
         "charid": b["charid"],
@@ -228,13 +290,26 @@ def get_bot(conn, charid):
         "nation": NATIONS.get(b["nation"], "?"),
         "job": JOBS[b["mjob"]] if b["mjob"] is not None and b["mjob"] < len(JOBS) else "?",
         "sub_job": JOBS[b["sjob"]] if b["sjob"] else None,
+        "sub_level": sub_job_level(jobs_row, b["mjob"], b["sjob"]),
+        "job_id": b["mjob"],
+        "sub_job_id": b["sjob"] or 0,
         "level": job_level(jobs_row, b["mjob"]),
         "job_levels": job_levels,
+        "exp": job_exp(conn, charid, b["mjob"], b["exp_next"]),
+        "skills": [{"id": r["skillid"], "name": SKILLS.get(r["skillid"], f"Skill {r['skillid']}"),
+                    "value": r["value"] / 10} for r in skills],
+        "spells": [pretty_item(r["name"]) or f"Spell {r['spellid']}" for r in spells],
+        "weapon_skills": weapon_skills,
         "online": bool(b["online"]),
         "autospawn": bool(b["autospawn"]),
         "zone": (b["zone_name"] or "").replace("_", " "),
         "pos": [round(b["saved_x"], 2), round(b["saved_y"], 2), round(b["saved_z"], 2)],
         "hp": b["hp"], "max_hp": b["max_hp"], "mp": b["mp"], "max_mp": b["max_mp"],
+        "ai_state": b["ai_state"] if b["online"] else None,
+        "leader": b["leader"] or None,
+        "action": (b.get("action") or None) if b["online"] else None,
+        "home": {"zone": (b["home_zone_name"] or "").replace("_", " "),
+                 "pos": [round(b["home_x"], 2), round(b["home_y"], 2), round(b["home_z"], 2)]} if b["home_zone"] else None,
         "gil": gil[0]["quantity"] if gil else 0,
         "created": b["created_at"],
         "equipment": [{"slot": name, "item": pretty_item(equipment[i]["name"]) if i in equipment else None,
@@ -242,7 +317,10 @@ def get_bot(conn, charid):
                       for i, name in enumerate(EQUIP_SLOTS)],
         "inventory": [{"slot": r["slot"], "item": pretty_item(r["name"]) or f"Item {r['itemId']}",
                        "item_id": r["itemId"], "quantity": r["quantity"],
-                       "equipped": (LOC_INVENTORY, r["itemId"]) in equipped_slots} for r in inventory],
+                       "equipped": (LOC_INVENTORY, r["slot"]) in equipped_slots} for r in inventory],
+        "wardrobe": [{"wardrobe": LOC_WARDROBES.index(r["location"]) + 1, "slot": r["slot"],
+                      "item": pretty_item(r["name"]) or f"Item {r['itemId']}", "item_id": r["itemId"],
+                      "equipped": (r["location"], r["slot"]) in equipped_slots} for r in wardrobe],
     }
 
 
@@ -299,15 +377,35 @@ def queue_command(conn, body):
             raise BadRequest(f"The name {name} is taken.")
         row.update(name=name,
                    race=as_int("race", 1, 8, True), face=as_int("face", 0, 15, True),
-                   size=as_int("size", 0, 2, True), job=as_int("job", 1, 6, True),
+                   size=as_int("size", 0, 2, True),
                    level=as_int("level", 1, 99) or 1, nation=as_int("nation", 0, 2),
                    autospawn=1 if body.get("autospawn", True) else 0)
+        row["job"] = as_int("job", 1, 13, True)
+        if row["job"] not in START_JOBS:
+            raise BadRequest("Bots can start as WAR, MNK, WHM, BLM, RDM, THF, BRD, RNG, SAM or NIN.")
     else:
         row["charid"] = as_int("charid", 1, 2**32 - 1, True)
         if not query(conn, "SELECT charid FROM bot_players WHERE charid = ?", (row["charid"],)):
             raise BadRequest("That character is not a bot.")
         if command == "autospawn":
             row["autospawn"] = 1 if body.get("autospawn") else 0
+        if command == "jobs":
+            # job: the new main job (left out = keep). subjob: the new subjob (left out =
+            # keep, 0 = none). The map server checks the rest (same job twice, in a fight...).
+            job = as_int("job", 1, 13)
+            subjob = as_int("subjob", 0, 13)
+            if job is None and subjob is None:
+                raise BadRequest("Pick a job or a subjob.")
+            if job is not None and job not in START_JOBS:
+                raise BadRequest("Bot jobs are WAR, MNK, WHM, BLM, RDM, THF, BRD, RNG, SAM and NIN.")
+            if subjob not in (None, 0) and subjob not in START_JOBS:
+                raise BadRequest("Bot jobs are WAR, MNK, WHM, BLM, RDM, THF, BRD, RNG, SAM and NIN.")
+            if job is not None and job == subjob:
+                raise BadRequest("The main job and the subjob can't be the same.")
+            if job is not None:
+                row["job"] = job
+            if subjob is not None:
+                row["subjob"] = subjob
 
     if command in ("create", "summon", "spawn"):
         anchor = as_int("anchor_charid", 1, 2**32 - 1)
@@ -319,6 +417,10 @@ def queue_command(conn, body):
                        pos_y=as_float("pos_y") or 0.0, pos_z=as_float("pos_z") or 0.0)
         elif command != "spawn":
             raise BadRequest("Pick a player to stand next to, or a zone and position.")
+
+    if command == "invite":
+        # The player who invites the bot to their party
+        row["anchor_charid"] = as_int("anchor_charid", 1, 2**32 - 1, True)
 
     columns = ", ".join(row)
     placeholders = ", ".join("?" for _ in row)

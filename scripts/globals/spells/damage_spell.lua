@@ -496,7 +496,40 @@ xi.spells.damage.calculateElementalAffinityBonus = function(caster, spellElement
     return 1 + caster:getMod(xi.data.element.getElementalMABModifier(spellElement)) / 100
 end
 
+-- CUSTOM (custom.RESIST_RANK_DAMAGE_RATE): damage rate by elemental resistance rank, in place
+-- of the retail x0.5 at rank 4+. The rank still changes magic evasion as in retail.
+local resistRankDamageRate =
+{
+    [-3] = 1.3,
+    [-2] = 1.15,
+    [-1] = 1,
+    [ 0] = 1,
+    [ 1] = 1,
+    [ 2] = 0.75,
+    [ 3] = 0.5,
+    [ 4] = 0.5,
+    [ 5] = 0.5,
+    [ 6] = 0.25,
+    [ 7] = 0.25,
+    [ 8] = 0.25,
+    [ 9] = 0.25,
+    [10] = 0.25,
+    [11] = 0.25,
+}
+
 xi.spells.damage.calculateAdditionalResistTier = function(caster, target, spellElement)
+    if xi.settings.custom and xi.settings.custom.RESIST_RANK_DAMAGE_RATE then
+        local rank = utils.clamp(target:getMod(xi.data.element.getElementalResistanceRankModifier(spellElement)), -3, 11)
+        local rate = resistRankDamageRate[rank]
+
+        -- Subtle Sorcery bypasses the reduction, not a weakness bonus.
+        if caster:hasStatusEffect(xi.effect.SUBTLE_SORCERY) then
+            return math.max(rate, 1)
+        end
+
+        return rate
+    end
+
     -- Subtle Sorcery bypasses this additional tier.
     if caster:hasStatusEffect(xi.effect.SUBTLE_SORCERY) then
         return 1
@@ -524,6 +557,7 @@ xi.spells.damage.calculateDayAndWeather = function(caster, spellElement, alwaysA
 
     if
         alwaysApply or                                    -- Helixes and other actions always apply both bonuses and penalties.
+        (xi.settings.custom and xi.settings.custom.DAY_WEATHER_ALWAYS) or -- CUSTOM (settings/default/custom.lua): no 33% roll.
         math.randomInt(1, 100) <= 33 or                      -- Random. Applies to both bonuses and penalties.
         caster:getMod(xi.mod.FORCE_DW_BONUS_PENALTY) >= 1 -- Hachirin-no-Obi forces both bonuses and penalties.
     then

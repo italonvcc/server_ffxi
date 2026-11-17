@@ -62,6 +62,7 @@ public:
     auto getName() -> const std::string&;
     auto getRegionID() -> xi::Region;
     auto getTypeMask() -> xi::ZoneType;
+    void addMiscFlag(xi::ZoneMisc misc);
     auto getBattlefieldByInitiator(uint32 charID) -> CBattlefield*;
     auto getWeather() const -> xi::Weather;
     auto getUptime() -> uint32;

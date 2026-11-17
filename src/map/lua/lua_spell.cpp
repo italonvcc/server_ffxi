@@ -78,6 +78,40 @@ void CLuaSpell::setRadius(float radius)
     m_PLuaSpell->setRadius(radius);
 }
 
+// Changes the spell itself (every later cast of it), not this one cast
+void CLuaSpell::setValidTarget(const uint16 validTarget)
+{
+    m_PLuaSpell->setValidTarget(validTarget);
+}
+
+// In yalms. Changes the spell itself (every later cast of it), not this one cast
+void CLuaSpell::setRange(const float range)
+{
+    m_PLuaSpell->setRange(range);
+}
+
+// The level a job learns and can cast the spell at, 0 = never. Changes the spell itself.
+void CLuaSpell::setJobLevel(const uint8 job, const uint8 level)
+{
+    m_PLuaSpell->setJobLevel(static_cast<xi::Job>(job), level);
+}
+
+// The level a job learns and can cast the spell at, 255 = never
+auto CLuaSpell::getJobLevel(const uint8 job) -> uint8
+{
+    return m_PLuaSpell->getJob(static_cast<xi::Job>(job));
+}
+
+auto CLuaSpell::getValidTarget() -> uint16
+{
+    return m_PLuaSpell->getValidTarget();
+}
+
+auto CLuaSpell::getRange() -> float
+{
+    return m_PLuaSpell->getRange();
+}
+
 void CLuaSpell::setAnimation(uint16 animationID)
 {
     m_PLuaSpell->setAnimationID(animationID);
@@ -96,6 +130,18 @@ auto CLuaSpell::getCastTime() -> uint32
 void CLuaSpell::setCastTime(uint32 casttime)
 {
     m_PLuaSpell->setCastTime(std::chrono::milliseconds(casttime));
+}
+
+// CUSTOM (server_ffxi): read and change a spell's base recast, in milliseconds
+// (modules/custom/lua/custom_spells.lua, custom.HASTE_PROTECT_RECAST)
+auto CLuaSpell::getRecastTime() -> uint32
+{
+    return static_cast<uint32>(timer::count_milliseconds(m_PLuaSpell->getRecastTime()));
+}
+
+void CLuaSpell::setRecastTime(uint32 recastTime)
+{
+    m_PLuaSpell->setRecastTime(std::chrono::milliseconds(recastTime));
 }
 
 auto CLuaSpell::getPrimaryTargetID() -> uint32
@@ -209,13 +255,20 @@ void CLuaSpell::Register()
     SOL_REGISTER("setAoE", CLuaSpell::setAoE);
     SOL_REGISTER("setFlag", CLuaSpell::setFlag);
     SOL_REGISTER("setRadius", CLuaSpell::setRadius);
+    SOL_REGISTER("setValidTarget", CLuaSpell::setValidTarget);
+    SOL_REGISTER("setRange", CLuaSpell::setRange);
+    SOL_REGISTER("setJobLevel", CLuaSpell::setJobLevel);
     SOL_REGISTER("setAnimation", CLuaSpell::setAnimation);
     SOL_REGISTER("setCastTime", CLuaSpell::setCastTime);
+    SOL_REGISTER("setRecastTime", CLuaSpell::setRecastTime);
     SOL_REGISTER("setMPCost", CLuaSpell::setMPCost);
     SOL_REGISTER("isAoE", CLuaSpell::isAoE);
     SOL_REGISTER("getAoE", CLuaSpell::getAoE);
     SOL_REGISTER("isConal", CLuaSpell::isConal);
     SOL_REGISTER("getRadius", CLuaSpell::getRadius);
+    SOL_REGISTER("getValidTarget", CLuaSpell::getValidTarget);
+    SOL_REGISTER("getRange", CLuaSpell::getRange);
+    SOL_REGISTER("getJobLevel", CLuaSpell::getJobLevel);
     SOL_REGISTER("tookEffect", CLuaSpell::tookEffect);
     SOL_REGISTER("getMagicBurstMessage", CLuaSpell::getMagicBurstMessage);
     SOL_REGISTER("getElement", CLuaSpell::getElement);
@@ -228,6 +281,7 @@ void CLuaSpell::Register()
     SOL_REGISTER("getFlag", CLuaSpell::getFlag);
     SOL_REGISTER("getLevel", CLuaSpell::getLevel);
     SOL_REGISTER("getCastTime", CLuaSpell::getCastTime);
+    SOL_REGISTER("getRecastTime", CLuaSpell::getRecastTime);
     SOL_REGISTER("getPrimaryTargetID", CLuaSpell::getPrimaryTargetID);
     SOL_REGISTER("getKnockback", CLuaSpell::getKnockback);
     SOL_REGISTER("isCritical", CLuaSpell::isCritical);

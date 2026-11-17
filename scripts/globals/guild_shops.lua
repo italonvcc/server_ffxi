@@ -78,9 +78,23 @@ local shopFor = function(npc)
     return xi.data.guildShops[canonicalShop(npc)]
 end
 
+-- True when the custom.GUILD_SHOPS_ALWAYS_OPEN mod is on: no opening hours, no holiday.
+local alwaysOpen = function()
+    return xi.settings.custom ~= nil and xi.settings.custom.GUILD_SHOPS_ALWAYS_OPEN == true
+end
+
+-- The shop's { openHour, closeHour }; the whole day (0-24) when always open.
+local shopHours = function(shop)
+    if alwaysOpen() then
+        return { 0, 24 }
+    end
+
+    return shop.hours
+end
+
 -- The shop's holiday weekday, or nil when holidays are disabled or unset.
 local shopHoliday = function(shop)
-    if not xi.settings.main.GUILD_SHOP_HOLIDAYS then
+    if alwaysOpen() or not xi.settings.main.GUILD_SHOP_HOLIDAYS then
         return nil
     end
 
@@ -141,8 +155,9 @@ local guildShopIsOpen = function(npc)
         return false
     end
 
-    local hour = VanadielHour()
-    return hour >= shop.hours[1] and hour < shop.hours[2]
+    local hours = shopHours(shop)
+    local hour  = VanadielHour()
+    return hour >= hours[1] and hour < hours[2]
 end
 
 ---@param player CBaseEntity
@@ -157,7 +172,8 @@ xi.guildShops.onTrigger = function(player, npc)
     npc:facePlayer(player)
     rollShopDay(npc, shop)
 
-    return player:openGuildShop(npc, shop.hours[1], shop.hours[2], shopHoliday(shop))
+    local hours = shopHours(shop)
+    return player:openGuildShop(npc, hours[1], hours[2], shopHoliday(shop))
 end
 
 ---Process player purchase.
@@ -327,7 +343,7 @@ xi.guildShops.onGameHour = function(player, npc)
         return
     end
 
-    if VanadielHour() == shop.hours[2] then
+    if VanadielHour() == shopHours(shop)[2] then
         xi.guildShops.onShopClose(player, npc)
     end
 end
@@ -338,7 +354,8 @@ end
 xi.guildShops.onShopClose = function(player, npc)
     local shop = shopFor(npc)
     if shop ~= nil then
-        player:sendGuildClose(shop.hours[1], shop.hours[2], true)
+        local hours = shopHours(shop)
+        player:sendGuildClose(hours[1], hours[2], true)
     end
 
     player:clearGuildShop()

@@ -76,6 +76,11 @@ end
 function CZone:getTypeMask()
 end
 
+---@param misc xi.zoneMisc
+---@return nil
+function CZone:addMiscFlag(misc)
+end
+
 ---@nodiscard
 ---@param charID integer
 ---@return CBattlefield?

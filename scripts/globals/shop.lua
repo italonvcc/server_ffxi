@@ -1080,8 +1080,11 @@ xi.shop.handleRegionalShop = function(player, npc)
         return
     end
 
-    -- Region owner check.
-    if GetRegionOwner(npcRegion) ~= npcData[regionParam.NATION] then
+    -- Region owner check (skipped by the custom.REGIONAL_VENDORS_ALWAYS_OPEN mod).
+    if
+        not (xi.settings.custom and xi.settings.custom.REGIONAL_VENDORS_ALWAYS_OPEN) and
+        GetRegionOwner(npcRegion) ~= npcData[regionParam.NATION]
+    then
         player:showText(npc, npcData[regionParam.TEXT_CLOSED])
         return
     end

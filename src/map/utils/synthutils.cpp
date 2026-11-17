@@ -1063,6 +1063,9 @@ void doSynthSkillUp(CCharEntity* PChar)
             }
         }
 
+        // Fork setting (settings/default/custom.lua): skill gained per skill-up, capped at 0.9.
+        skillUpAmount = static_cast<uint8>(std::clamp<long>(std::lround(skillUpAmount * settings::get<double>("custom.CRAFT_SKILLUP_MULTIPLIER")), 1, 9));
+
         // Cap skill gain amount if character hits the current cap
         skillUpAmount = static_cast<uint8>(std::min<uint16>(skillUpAmount, maxSkill - charSkill));
 

@@ -78,6 +78,18 @@ void auctionutils::SellingItems(CCharEntity* PChar, GP_AUC_PARAM_ASKCOMMIT param
             return;
         }
 
+        // Fork mod: list right away instead of asking the client to confirm the fee.
+        if (settings::get<bool>("custom.AUCTION_QUICK_LIST"))
+        {
+            ProofOfPurchase(PChar, GP_AUC_PARAM_LOT{
+                                       .LimitPrice    = param.Commission,
+                                       .ItemWorkIndex = param.ItemWorkIndex,
+                                       .padding00     = 0,
+                                       .ItemStacks    = param.ItemStacks,
+                                   });
+            return;
+        }
+
         PChar->pushPacket<GP_SERV_COMMAND_AUC>(GP_CLI_COMMAND_AUC_COMMAND::AskCommit, PItem, param.ItemStacks, param.Commission);
     }
 }

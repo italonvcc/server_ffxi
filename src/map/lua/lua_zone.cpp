@@ -184,6 +184,19 @@ auto CLuaZone::getTypeMask() -> xi::ZoneType
     return m_pLuaZone->GetTypeMask();
 }
 
+/************************************************************************
+ *  Function: addMiscFlag()
+ *  Purpose : Turns on a zone misc flag (xi.zoneMisc) until the server restarts
+ *  Example : zone:addMiscFlag(xi.zoneMisc.MOGMENU)
+ *  Notes   : server_ffxi. Players already in the zone see a client-side flag
+ *            (e.g. MOGMENU) only after they next enter it.
+ ************************************************************************/
+
+void CLuaZone::addMiscFlag(xi::ZoneMisc misc)
+{
+    m_pLuaZone->AddMisc(misc);
+}
+
 auto CLuaZone::getBattlefieldByInitiator(uint32 charID) -> CBattlefield*
 {
     if (m_pLuaZone->battlefieldHandler())
@@ -413,6 +426,7 @@ void CLuaZone::Register()
     SOL_REGISTER("getName", CLuaZone::getName);
     SOL_REGISTER("getRegionID", CLuaZone::getRegionID);
     SOL_REGISTER("getTypeMask", CLuaZone::getTypeMask);
+    SOL_REGISTER("addMiscFlag", CLuaZone::addMiscFlag);
     SOL_REGISTER("getBattlefieldByInitiator", CLuaZone::getBattlefieldByInitiator);
     SOL_REGISTER("getWeather", CLuaZone::getWeather);
     SOL_REGISTER("getUptime", CLuaZone::getUptime);

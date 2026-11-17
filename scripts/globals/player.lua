@@ -57,7 +57,8 @@ xi.player.charCreate = function(player)
     end
 
     -- add job-specific starting gear
-    for _, v in pairs(startingJobGear[player:getMainJob()]) do
+    -- (bot players can start on a job with no entry, see modules/bots)
+    for _, v in pairs(startingJobGear[player:getMainJob()] or {}) do
         if not player:hasItem(v) then
             player:addItem(v)
         end

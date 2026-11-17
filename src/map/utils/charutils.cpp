@@ -3867,6 +3867,12 @@ void TrySkillUP(CCharEntity* PChar, xi::SkillType SkillID, uint8 lvl, bool force
             SkillUpChance *= ((100.0f + PChar->getMod(xi::Mod::MAGIC_SKILLUP_RATE)) / 100.0f);
         }
 
+        // Fork setting (settings/default/custom.lua): every eligible try is a skill-up.
+        if (settings::get<bool>("custom.COMBAT_SKILLUP_GUARANTEED"))
+        {
+            SkillUpChance = 1.0;
+        }
+
         if (Diff > 0 && (random < SkillUpChance || forceSkillUp))
         {
             double chance      = 0;
@@ -3926,6 +3932,10 @@ void TrySkillUP(CCharEntity* PChar, xi::SkillType SkillID, uint8 lvl, bool force
                 SkillAmount = std::min<uint8>(SkillAmount, 9);
             }
 
+            // Fork setting (settings/default/custom.lua): skill gained per skill-up. No 0.9 cap, so
+            // one skill-up can raise the skill by more than one level (handled below).
+            SkillAmount = static_cast<uint8>(std::clamp<long>(std::lround(SkillAmount * settings::get<double>("custom.COMBAT_SKILLUP_MULTIPLIER")), 1, 255));
+
             if (SkillAmount + CurSkill >= CapSkill)
             {
                 // skill is capped. set blue flag
@@ -3943,7 +3953,9 @@ void TrySkillUP(CCharEntity* PChar, xi::SkillType SkillID, uint8 lvl, bool force
             PChar->RealSkills.skill[rawSkillID] += SkillAmount;
             PChar->pushPacket<GP_SERV_COMMAND_BATTLE_MESSAGE>(PChar, PChar, rawSkillID, SkillAmount, MsgBasic::SkillGain);
 
-            if ((CurSkill / 10) < (CurSkill + SkillAmount) / 10) // if gone up a level
+            // Levels gained: at most 1 in vanilla (0.9 cap), more with custom.COMBAT_SKILLUP_MULTIPLIER.
+            const uint16 levelsGained = (CurSkill + SkillAmount) / 10 - CurSkill / 10;
+            if (levelsGained > 0) // if gone up a level
             {
                 // Light/Dark Arts artificially boost certain skills
                 // if skillup happens when real skill is below the base for active arts, don't increment the shown skill
@@ -3952,12 +3964,12 @@ void TrySkillUP(CCharEntity* PChar, xi::SkillType SkillID, uint8 lvl, bool force
                     // if the bonus is the same, our real skill was already past the base bonus, so increment the shown skill from skillup
                     if (skillBonus == ArtsBonusSkill(PChar, SkillID))
                     {
-                        PChar->WorkingSkills.skill[rawSkillID] += 1;
+                        PChar->WorkingSkills.skill[rawSkillID] += levelsGained;
                     }
                 }
                 else
                 {
-                    PChar->WorkingSkills.skill[rawSkillID] += 1;
+                    PChar->WorkingSkills.skill[rawSkillID] += levelsGained;
                 }
                 PChar->pushPacket<GP_SERV_COMMAND_CLISTATUS2>(PChar);
                 PChar->pushPacket<GP_SERV_COMMAND_BATTLE_MESSAGE>(PChar, PChar, rawSkillID, (CurSkill + SkillAmount) / 10, MsgBasic::SkillLevelUp);
@@ -4592,7 +4604,7 @@ void DistributeItem(CCharEntity* PChar, CBaseEntity* PEntity, uint16 itemid, uin
         thDropRate = thDropRateFunction(PMob->m_THLvl, thDropRate);
     }
 
-    if (thDropRate > 0 && (1 + xirand::GetRandomNumber(10000)) <= thDropRate * settings::get<float>("map.DROP_RATE_MULTIPLIER"))
+    if (thDropRate > 0 && (1 + xirand::GetRandomNumber(10000)) <= thDropRate * settings::get<float>("map.DROP_RATE_MULTIPLIER") * settings::get<float>("custom.DROP_RATE_MULTIPLIER"))
     {
         PChar->PTreasurePool->addItem(itemid, PEntity);
     }
@@ -4665,8 +4677,12 @@ void DistributeExperiencePoints(CCharEntity* PChar, CMobEntity* PMob)
     PMob->m_HiPartySize = pcinzone;
     PMob->m_HiPCLvl     = maxlevel;
 
+    // Fork setting (settings/default/custom.lua): grade each member against their own level
+    // instead of the highest level in range.
+    const bool useOwnLevel = settings::get<bool>("custom.EXP_USE_OWN_LEVEL");
+
     // clang-format off
-        PChar->ForAlliance([&PMob, &region, &maxlevel, &pcinzone](CBattleEntity* PPartyMember)
+        PChar->ForAlliance([&PMob, &region, &maxlevel, &pcinzone, useOwnLevel](CBattleEntity* PPartyMember)
         {
             CCharEntity* PMember = dynamic_cast<CCharEntity*>(PPartyMember);
             if (!PMember || PMember->isDead())
@@ -4676,8 +4692,10 @@ void DistributeExperiencePoints(CCharEntity* PChar, CMobEntity* PMob)
 
             const int16 moblevel    = PMob->GetMLevel() + PMob->getMod(xi::Mod::EXP_LVL_MOD);
             const uint8 memberlevel = GetExpLevel(PMember);
+            // With useOwnLevel the member is its own "highest level", so the Lua level scaling is 1.
+            const uint8 gradeLevel  = useOwnLevel ? memberlevel : maxlevel;
 
-            EMobDifficulty mobCheck = CheckMob(maxlevel, PMob);
+            EMobDifficulty mobCheck = CheckMob(gradeLevel, PMob);
 
             if (mobCheck == EMobDifficulty::TooWeak || PMember->getZone() != PMob->getZone())
             {
@@ -4693,14 +4711,14 @@ void DistributeExperiencePoints(CCharEntity* PChar, CMobEntity* PMob)
             const bool chainActive = PMember->expChain.chainTime > timer::now() || PMember->expChain.chainTime == timer::time_point::min();
 
             luautils::CalcExpInput input{};
-            input.baseExp            = GetBaseExp(maxlevel, moblevel);
+            input.baseExp            = GetBaseExp(gradeLevel, moblevel);
             input.mobDifficulty      = static_cast<uint8>(mobCheck);
             input.memberLevel        = memberlevel;
-            input.highestMemberLevel = maxlevel;
+            input.highestMemberLevel = gradeLevel;
             input.partySize          = pcinzone;
             // Monipulators only party with each other, so the whole party shares one curve.
             input.memberTNL          = GetExpNEXTLevelForChar(PMember, memberlevel);
-            input.highestMemberTNL   = GetExpNEXTLevelForChar(PMember, maxlevel);
+            input.highestMemberTNL   = GetExpNEXTLevelForChar(PMember, gradeLevel);
             input.regionId           = static_cast<uint8>(region);
             input.chainNumber        = PMember->expChain.chainNumber;
             input.chainActive        = chainActive;

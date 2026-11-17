@@ -20,8 +20,42 @@ CREATE TABLE IF NOT EXISTS `bot_players` (
   PRIMARY KEY (`charid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Added with the AI. home_* is where the bot stands when it has nothing to do
+-- (home_zone = 0: not set yet). ai_state (idle | follow | wait | return) and leader are live columns.
+ALTER TABLE `bot_players`
+  ADD COLUMN IF NOT EXISTS `home_zone` SMALLINT(5) UNSIGNED NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS `home_x` FLOAT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS `home_y` FLOAT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS `home_z` FLOAT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS `home_rot` TINYINT(3) UNSIGNED NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS `ai_state` VARCHAR(8) NOT NULL DEFAULT 'idle',
+  ADD COLUMN IF NOT EXISTS `leader` VARCHAR(15) NOT NULL DEFAULT '';
+
+-- Added with combat (ai_state also takes fight | rest | dead). Live columns: the main job's
+-- level, its exp, and the exp the next level needs.
+ALTER TABLE `bot_players`
+  ADD COLUMN IF NOT EXISTS `level` TINYINT(3) UNSIGNED NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS `exp` SMALLINT(5) UNSIGNED NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS `exp_next` SMALLINT(5) UNSIGNED NOT NULL DEFAULT 0;
+
+-- Added with the per-job AI. Live column: the last spell the bot cast ("cure_ii > Kenji"),
+-- empty a few seconds later.
+ALTER TABLE `bot_players`
+  ADD COLUMN IF NOT EXISTS `action` VARCHAR(48) NOT NULL DEFAULT '';
+
+-- Added with food: the item id of the food the bot keeps eating (the last kind a player
+-- traded to it), 0 for none.
+ALTER TABLE `bot_players`
+  ADD COLUMN IF NOT EXISTS `food` SMALLINT(5) UNSIGNED NOT NULL DEFAULT 0;
+
+-- For the dashboard: the weapon skills the bot can use with the weapons it holds, by name,
+-- comma separated. Written by the map server when the set changes.
+ALTER TABLE `bot_players`
+  ADD COLUMN IF NOT EXISTS `weapon_skills` VARCHAR(1024) NOT NULL DEFAULT '';
+
 -- Command queue, run by the map server every time server tick (2.4s).
--- command: create | spawn | despawn | summon | autospawn | delete
+-- command: create | spawn | despawn | summon | autospawn | delete | invite
+--          (testing aids: move | puppet | engage)
 -- status:  pending | done | failed
 CREATE TABLE IF NOT EXISTS `bot_commands` (
   `id` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -32,6 +66,7 @@ CREATE TABLE IF NOT EXISTS `bot_commands` (
   `face` TINYINT(3) UNSIGNED NULL DEFAULT NULL,
   `size` TINYINT(3) UNSIGNED NULL DEFAULT NULL,
   `job` TINYINT(3) UNSIGNED NULL DEFAULT NULL,
+  `subjob` TINYINT(3) UNSIGNED NULL DEFAULT NULL,
   `level` TINYINT(3) UNSIGNED NULL DEFAULT NULL,
   `nation` TINYINT(3) UNSIGNED NULL DEFAULT NULL,
   `autospawn` TINYINT(1) UNSIGNED NULL DEFAULT NULL,

@@ -1227,6 +1227,7 @@ public:
     void setTotalTargets(uint16 total);
     void setID(SpellID id);
     void setJob(const std::array<uint8, MAX_JOBTYPE>& jobs);
+    void setJobLevel(xi::Job JobID, uint8 level);
     void setMPCost(uint16 MP);
     void setCastTime(timer::duration CastTime);
     void setRecastTime(timer::duration RecastTime);

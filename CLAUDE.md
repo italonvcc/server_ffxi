@@ -24,6 +24,12 @@ Keep bot work in `modules/bots/` (C++ module + Lua + dashboard). Only change cor
   or it targets upstream LandSandBoat.
 - Verify in the running server (logs, DB, dashboard API). In-client checks are the user's;
   say what you couldn't verify.
+- Optional gameplay changes (non-retail) go behind a toggle in
+  `settings/default/custom.lua` (`xi.settings.custom.*` / `settings::get("custom.*")`),
+  where `false` (or `1.0` for multipliers) means vanilla. `settings/custom.lua` is the
+  local, gitignored override. `xi_test` resets every `custom.*` to vanilla at startup so
+  upstream tests stay retail; tests for the mods are in
+  `scripts/tests/systems/custom_settings.lua` (`xi_test.exe --file custom_settings`).
 
 ## Build (Windows, this machine)
 
@@ -38,8 +44,9 @@ cmake --build build --config RelWithDebInfo --target xi_map
 ```
 
 The last build step copies `xi_map.exe` to the repo root. It fails with "Permission denied"
-while xi_map is running (the exe is locked); compile and link have still succeeded. Adding
-or removing module files (or editing `modules/init.txt`) re-runs CMake configure.
+while xi_map is running (the exe is locked); compile and link have still succeeded. Editing
+`modules/init.txt` re-runs CMake configure; adding or removing a module `.cpp` does not,
+so run `cmake build` first or the new file is silently left out.
 
 ## Running the servers
 

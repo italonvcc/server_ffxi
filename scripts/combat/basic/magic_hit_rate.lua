@@ -304,6 +304,7 @@ local function magicAccuracyFromWeatherElement(actor, params)
     local applyPenalties = false
 
     if
+        (xi.settings.custom and xi.settings.custom.DAY_WEATHER_ALWAYS) or -- CUSTOM (settings/default/custom.lua): no 33% roll.
         math.randomInt(1, 100) <= 33 or                     -- Random. Applies to both bonuses and penalties.
         actor:getMod(xi.mod.FORCE_DW_BONUS_PENALTY) >= 1 -- Hachirin-no-Obi forces both bonuses and penalties.
     then
@@ -570,9 +571,12 @@ xi.combat.magicHitRate.calculateResistRate = function(actor, target, fedData)
     if params.resistanceRank >= 11 then
         if params.effectId > 0 then
             return 0    -- Status Effects
-        else
+        elseif not (xi.settings.custom and xi.settings.custom.RESIST_RANK_DAMAGE_RATE) then
             return 0.25 -- Nukes
         end
+
+        -- CUSTOM (custom.RESIST_RANK_DAMAGE_RATE): rank 11's damage cut is in the rank damage
+        -- rate table (damage_spell.lua), so nukes roll resists like rank 10 instead.
     end
 
     -- Early return: MHR is floored to 0.05. Skip calculating it.

@@ -79,6 +79,15 @@ void CSpell::setJob(const std::array<uint8, MAX_JOBTYPE>& jobs)
     m_job = jobs;
 }
 
+void CSpell::setJobLevel(const xi::Job JobID, const uint8 level)
+{
+    const auto index = static_cast<uint8>(JobID);
+    if (index < m_job.size())
+    {
+        m_job[index] = level;
+    }
+}
+
 auto CSpell::getCastTime() const -> timer::duration
 {
     return m_castTime;
