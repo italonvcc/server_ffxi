@@ -176,6 +176,10 @@ constexpr uint8 kFacingJitter       = 24;    // Of 256 to a full turn, either wa
 // Further than this from the leader (teleport, fall, stuck): warp instead of walking.
 constexpr float kWarpDistance = 45.0f;
 
+// A bot that finds no path only warps when it is at least this far from the leader, and
+// not while the party is fighting: next to the leader it just stays where it is.
+constexpr float kWarpMinDistance = 15.0f;
+
 // At most one navmesh query per bot per interval, and only once the leader has moved this
 // far from where the current path ends.
 constexpr auto  kRepathInterval = std::chrono::milliseconds(800);
@@ -193,8 +197,11 @@ constexpr auto  kReturnTimeout        = std::chrono::seconds(180);
 
 // CPathFind moves an entity (speed / 17) yalms per second, which for a PC's speed of 50 is
 // 2.9 yalms/s: slower than a player runs (mobs and trusts get a 2.5x "run" multiplier that
-// PCs don't). Two steps per tick is 5.9 yalms/s, the same as a trust, enough to keep up.
-constexpr int kStepsPerTick = 2;
+// PCs don't). A client moves another player's character at speed / 10 yalms per second
+// (5.0 at speed 50) towards where the server says it is, and makes it jump there when it
+// falls too far behind. So a bot moves exactly that much per tick, in two path steps: any
+// faster and it is seen teleporting at the end of a long run.
+constexpr float kYalmsPerTickPerSpeed = 0.04f; // (speed / 10) yalms/s x the 0.4 s tick
 
 // A bot answers a trade request after this long, and confirms its side a moment later.
 constexpr auto kTradeDelay   = std::chrono::milliseconds(1200);
@@ -241,6 +248,9 @@ constexpr auto kStolenCheck = std::chrono::seconds(3);
 // after it was given.
 constexpr auto kOrderLife = std::chrono::seconds(8);
 
+// A spell order (!ma) gets longer: the bot may have to walk into range first
+constexpr auto kSpellOrderLife = std::chrono::seconds(20);
+
 // Skillchains. The game refuses to chain a weapon skill that lands less than 3 s after the
 // last one (and restarts the chain with it instead), and the window closes 10 s after the
 // opener, 1 s sooner per step. A bot's skill lands up to one tick (0.4 s) after it starts,
@@ -255,6 +265,12 @@ constexpr int16 kWeaponSkillTp = 1000;
 // kMeleeInside yalms inside its melee range and only moves again once it is out of range.
 constexpr float kAssistRange = 25.0f;
 constexpr float kMeleeInside = 1.2f;
+
+// Bots in melee spread around the enemy: each takes a spot kMeleeSpread degrees further
+// round from the leader's side than the last, to either side in turn, moved by up to
+// kMeleeSpreadJitter per bot.
+constexpr float kMeleeSpread       = 40.0f;
+constexpr float kMeleeSpreadJitter = 10.0f;
 constexpr float kMeleeMargin = 0.3f;
 constexpr float kTargetDrift = 1.0f;
 constexpr auto  kEngageRetry = std::chrono::seconds(1);
@@ -297,6 +313,21 @@ constexpr uint8 kDebuffAboveHpp = 25;
 constexpr int16 kMaxResistRank  = 4;
 constexpr auto  kDebuffRetry    = std::chrono::seconds(45);
 constexpr auto  kBuffRetry      = std::chrono::seconds(15);
+
+// Auction house category of ninja tools; the only usable items in it are the toolbags
+constexpr uint8 kAhNinjaTools = 49;
+
+// Status removal: the same ailment on the same member is not tried again for kCleanseRetry
+// (the spell is on its way, or it failed, as Cursna can).
+constexpr auto kCleanseRetry = std::chrono::seconds(6);
+
+// Songs reach about 10 yalms around the bard. To sing for members who lack a song it walks
+// up to kSongReach of the one with the most others within kSongCluster. A song is sung
+// again when it has less than kSongRefresh left, and not twice within kSongRetry.
+constexpr float kSongReach   = 7.0f;
+constexpr float kSongCluster = 5.0f;
+constexpr auto  kSongRefresh = std::chrono::seconds(10);
+constexpr auto  kSongRetry   = std::chrono::seconds(12);
 
 // A mage that does not melee stays kMageHold yalms from the enemy (most area attacks reach
 // 10 to 15): it backs off when closer than kMageNear and closes in when out of cast range.
@@ -393,6 +424,11 @@ struct Kit
     std::array<uint16, bots::kBuffs.size()>   buffs{};   // By bots::kBuffs line, the highest tier
     std::array<uint16, bots::kDebuffs.size()> debuffs{}; // By bots::kDebuffs line
     std::vector<uint16>                       nukes;
+    std::array<bool, bots::kCleanses.size()>  cleanse{};        // By bots::kCleanses line
+    bool                                      erase    = false;
+    bool                                      cleanses = false; // Any of cleanse, or erase
+    bool                                      songs    = false; // Knows a bard song
+    std::array<uint16, bots::kShadows.size()> shadows{};        // By bots::kShadows entry, 0 where not known
     bool                                      dispel  = false;
     bool                                      hasCure = false;
     bool                                      any     = false;
@@ -421,7 +457,7 @@ struct Claim
     timer::time_point step{}; // Skillchains: when the weapon skill being answered landed
 };
 
-// Something a player told a bot to do (!ja, !ws)
+// Something a player told a bot to do (!ja, !ws, !ma)
 struct Order
 {
     enum class Kind : uint8
@@ -429,15 +465,24 @@ struct Order
         None,
         Ability,
         WeaponSkill,
+        Spell,
     };
 
     Kind              kind     = Kind::None;
-    uint16            id       = 0; // Ability or weapon skill id
+    uint16            id       = 0; // Ability, weapon skill or spell id
     uint32            targetId = 0;
     uint16            targid   = 0;
     uint32            playerId = 0; // Who gave it
     std::string       name;         // Of the ability or weapon skill, for messages
     timer::time_point until{};
+};
+
+// A song a player asked a bard for (!ma): sung again whenever it wears off
+struct Song
+{
+    uint16           spellId;
+    xi::StatusEffect effect;
+    uint32           targetId; // 0: for everybody around the bard. Else the one member it is for (Etudes)
 };
 
 // A spawned bot
@@ -514,6 +559,13 @@ struct Bot
     // enemy, as the fight starts, and never again.
     uint32 spacedFor = 0;
 
+    // Melee: the enemy it has a spot around, the direction of that spot from the enemy
+    // (radians), whether it has pathed there and whether it got there (or as near as it can)
+    uint32 meleeFor     = 0;
+    float  meleeAngle   = 0.0f;
+    bool   meleeAimed   = false;
+    bool   meleeSettled = false;
+
     // The enemy the party is fighting and when the party first had its attention
     uint32            foeId = 0;
     timer::time_point foeSince{};
@@ -521,6 +573,10 @@ struct Bot
     // The party member this healer is walking into cast range of (0 = nobody)
     uint32            patientId = 0;
     timer::time_point patientUntil{};
+    float             patientReach = kCastRange; // How close it has to get
+
+    // The songs it keeps up, oldest first
+    std::vector<Song> songs;
 
     // Whether a buff is waiting to be cast, looked at every kBuffWaitCheck while standing
     bool              buffWaiting = false;
@@ -742,45 +798,152 @@ auto placementNear(const CCharEntity* PAnchor) -> Placement
     return placement;
 }
 
-// Equips anything in the inventory that fits an empty slot (starting weapon, nation ring, ...).
-// EquipItem() does the level/job/race checks and quietly refuses what doesn't fit.
+// The containers a bot keeps gear in: the inventory, then the eight wardrobes (the same ones
+// charutils::LoadJobChangeGear looks in).
+inline constexpr std::array<uint8, 9> kGearContainers{
+    LOC_INVENTORY, LOC_WARDROBE, LOC_WARDROBE2, LOC_WARDROBE3, LOC_WARDROBE4, LOC_WARDROBE5, LOC_WARDROBE6, LOC_WARDROBE7, LOC_WARDROBE8,
+};
+
+// Equips anything in the inventory or a wardrobe that fits an empty slot (starting weapon,
+// nation ring, gear stored on another job, ...). EquipItem() does the level/job/race checks and
+// quietly refuses what doesn't fit.
 void autoEquipEmptySlots(CCharEntity* PBot)
 {
-    auto* PInventory = PBot->getStorage(LOC_INVENTORY);
-
-    for (uint8 invSlot = 1; invSlot <= PInventory->GetSize(); ++invSlot)
+    for (const auto containerId : kGearContainers)
     {
-        auto* PItem = dynamic_cast<CItemEquipment*>(PInventory->GetItem(invSlot));
-        if (PItem == nullptr || PItem->getReqLvl() > PBot->GetMLevel())
-        {
-            continue;
-        }
+        auto* PContainer = PBot->getStorage(containerId);
 
-        bool alreadyEquipped = false;
-        for (uint8 slot = 0; slot < MAX_SLOTTYPE; ++slot)
+        for (uint8 itemSlot = 1; itemSlot <= PContainer->GetSize(); ++itemSlot)
         {
-            if (PBot->getEquip(static_cast<SLOTTYPE>(slot)) == PItem)
+            auto* PItem = dynamic_cast<CItemEquipment*>(PContainer->GetItem(itemSlot));
+            if (PItem == nullptr || PItem->getReqLvl() > PBot->GetMLevel())
             {
-                alreadyEquipped = true;
-                break;
+                continue;
             }
-        }
 
-        if (alreadyEquipped)
-        {
-            continue;
-        }
-
-        const auto slotMask = PItem->getEquipSlotId();
-        for (uint8 slot = 0; slot < MAX_SLOTTYPE; ++slot)
-        {
-            if ((slotMask & (1 << slot)) && PBot->getEquip(static_cast<SLOTTYPE>(slot)) == nullptr)
+            bool alreadyEquipped = false;
+            for (uint8 slot = 0; slot < MAX_SLOTTYPE; ++slot)
             {
-                charutils::EquipItem(PBot, invSlot, slot, LOC_INVENTORY);
-                break;
+                if (PBot->getEquip(static_cast<SLOTTYPE>(slot)) == PItem)
+                {
+                    alreadyEquipped = true;
+                    break;
+                }
+            }
+
+            if (alreadyEquipped)
+            {
+                continue;
+            }
+
+            const auto slotMask = PItem->getEquipSlotId();
+            for (uint8 slot = 0; slot < MAX_SLOTTYPE; ++slot)
+            {
+                if ((slotMask & (1 << slot)) && PBot->getEquip(static_cast<SLOTTYPE>(slot)) == nullptr)
+                {
+                    charutils::EquipItem(PBot, itemSlot, slot, containerId);
+                    break;
+                }
             }
         }
     }
+}
+
+// Bots have no client to show a bag, so they all get the largest one (the size the Gobbie bag
+// quests end at) instead of the 30 slots of a new character.
+constexpr uint8 kBotInventorySize = 80;
+
+void growInventory(CCharEntity* PBot)
+{
+    auto* PInventory = PBot->getStorage(LOC_INVENTORY);
+    if (PInventory->GetBuff() >= kBotInventorySize)
+    {
+        return;
+    }
+
+    PInventory->AddBuff(static_cast<int8>(kBotInventorySize - PInventory->GetBuff()));
+    charutils::SaveCharInventoryCapacity(PBot);
+}
+
+// When the inventory has fewer free slots than this, the gear the bot isn't wearing goes to its
+// wardrobes. Ammo stays: equipBestAmmo only looks in the inventory.
+constexpr uint8 kStowBelowFreeSlots = 10;
+
+// Moves gear the bot isn't wearing from its inventory to the first wardrobe with room, the way
+// the client's item move packet (0x029) does. Returns how many items were moved.
+auto stowSpareGear(CCharEntity* PBot) -> int
+{
+    auto* PInventory = PBot->getStorage(LOC_INVENTORY);
+    if (PInventory->GetFreeSlotsCount() >= kStowBelowFreeSlots)
+    {
+        return 0;
+    }
+
+    int moved = 0;
+    for (uint8 invSlot = 1; invSlot <= PInventory->GetSize(); ++invSlot)
+    {
+        auto* PItem = dynamic_cast<CItemEquipment*>(PInventory->GetItem(invSlot));
+        if (PItem == nullptr || PItem->isBusy() || PItem->getEquipSlotId() == (1 << SLOT_AMMO))
+        {
+            continue;
+        }
+
+        bool worn = false;
+        for (uint8 slot = 0; slot < MAX_SLOTTYPE && !worn; ++slot)
+        {
+            worn = PBot->getEquip(static_cast<SLOTTYPE>(slot)) == PItem;
+        }
+
+        if (worn)
+        {
+            continue;
+        }
+
+        for (const auto containerId : kGearContainers)
+        {
+            if (containerId == LOC_INVENTORY)
+            {
+                continue;
+            }
+
+            auto* PWardrobe = PBot->getStorage(containerId);
+            if (PWardrobe->GetFreeSlotsCount() == 0)
+            {
+                continue;
+            }
+
+            const auto newSlot = PInventory->MoveItemTo(invSlot, *PWardrobe);
+            if (newSlot == ERROR_SLOTID)
+            {
+                continue;
+            }
+
+            const auto rset = db::preparedStmt("UPDATE char_inventory SET location = ?, slot = ? WHERE charid = ? AND location = ? AND slot = ?",
+                                               containerId,
+                                               newSlot,
+                                               PBot->id,
+                                               static_cast<uint8>(LOC_INVENTORY),
+                                               invSlot);
+            if (rset && rset->rowsAffected())
+            {
+                ++moved;
+            }
+            else
+            {
+                // Keep memory and the DB the same
+                PWardrobe->MoveItemTo(newSlot, *PInventory, invSlot);
+            }
+
+            break;
+        }
+    }
+
+    if (moved > 0)
+    {
+        ShowInfoFmt("bot_players: {} moved {} piece(s) of gear to its wardrobes", PBot->getName(), moved);
+    }
+
+    return moved;
 }
 
 // In a town (a zone of the City type): bots don't eat or cast buffs there
@@ -1116,6 +1279,7 @@ public:
         db::preparedStmt("UPDATE bot_players SET online = 0");
 
         curePower_ = settings::get<float>("main.CURE_POWER");
+        autoLearn_ = settings::get<bool>("custom.BOT_AUTO_LEARN_SPELLS");
 
         // NOTE: Use the global ::lua, not CPPModule::lua. The member is bound during static
         //     : initialization, possibly before the global state exists, and crashes on use.
@@ -1157,8 +1321,9 @@ public:
             return list();
         };
 
-        // !ja / !ws (modules/bots/lua/bot_orders.lua). Returns what to tell the player.
-        bots["order"] = [this](CLuaBaseEntity* PLuaPlayer, const std::string& botName, const std::string& what, const bool weaponSkill) -> std::string
+        // !ja / !ws / !ma (modules/bots/lua/bot_orders.lua): `command` is "ja", "ws" or "ma".
+        // Returns what to tell the player.
+        bots["order"] = [this](CLuaBaseEntity* PLuaPlayer, const std::string& botName, const std::string& what, const std::string& command) -> std::string
         {
             auto* PPlayer = PLuaPlayer ? dynamic_cast<CCharEntity*>(PLuaPlayer->GetBaseEntity()) : nullptr;
             if (PPlayer == nullptr || PPlayer->loc.zone == nullptr)
@@ -1166,7 +1331,9 @@ public:
                 return "You need to be in a zone.";
             }
 
-            return giveOrder(PPlayer, botName, what, weaponSkill ? Order::Kind::WeaponSkill : Order::Kind::Ability);
+            const auto kind = command == "ws" ? Order::Kind::WeaponSkill : command == "ma" ? Order::Kind::Spell : Order::Kind::Ability;
+
+            return giveOrder(PPlayer, botName, what, kind);
         };
 
         xi["bots"] = bots;
@@ -1654,7 +1821,8 @@ private:
     // Items
     //
 
-    // Puts on gear that fits an empty slot and learns one scroll. Returns true when the bot
+    // Puts on gear that fits an empty slot, learns one scroll or opens one toolbag (the ninja
+    // tools inside go to its inventory). Returns true when the bot
     // started using something. Only runs when flagged, see Bot::checkItems.
     auto useItems(Bot& bot, const timer::time_point now) -> bool
     {
@@ -1664,17 +1832,25 @@ private:
 
         autoEquipEmptySlots(PBot);
 
+        // Not while a trade or a Steal is being looked at: those compare inventory slots, and
+        // Bot::giveBack holds inventory slots too
+        if (!bot.tradedPending && !bot.stolenPending && bot.giveBack.empty())
+        {
+            stowSpareGear(PBot);
+        }
+
         auto* PInventory = PBot->getStorage(LOC_INVENTORY);
 
         for (uint8 slot = 1; slot <= PInventory->GetSize(); ++slot)
         {
             auto* PItem = dynamic_cast<CItemUsable*>(PInventory->GetItem(slot));
-            if (PItem == nullptr || !PItem->hasFlag(xi::ItemFlag::Scroll) || PItem->isType(ITEM_EQUIPMENT))
+            if (PItem == nullptr || PItem->isType(ITEM_EQUIPMENT) || (!PItem->hasFlag(xi::ItemFlag::Scroll) && PItem->getAHCat() != kAhNinjaTools))
             {
                 continue;
             }
 
-            // 0: the bot's job can learn it at this level and doesn't know it yet
+            // 0: the bot's job can learn it at this level and doesn't know it yet, or there
+            // is room for what the toolbag holds
             const auto [error, param, value] = luautils::OnItemCheck(PBot, PItem, PBot);
             if (error != 0)
             {
@@ -2044,10 +2220,12 @@ private:
         const bool nukeNow = attacked && bot.foeId == PMob->id && now >= bot.foeSince + kNukeHold;
 
         bool decide = false;
+        bool tick   = false; // A decision is due, also for a bot without MP (ninjutsu)
         if (now >= bot.nextDecision)
         {
             bot.nextDecision = now + kDecisionInterval;
             decide           = canCast(bot, now);
+            tick             = true;
         }
 
         // On its way to a patient that is out of cast range: nothing else until it gets there
@@ -2071,6 +2249,18 @@ private:
                         return true;
                     }
                     break;
+                case bots::Act::Cleanse:
+                    if (decide && tryCleanse(bot, now))
+                    {
+                        return true;
+                    }
+                    break;
+                case bots::Act::Song:
+                    if (decide && trySong(bot, now))
+                    {
+                        return true;
+                    }
+                    break;
                 case bots::Act::Buff:
                     if (decide && tryBuff(bot, now))
                     {
@@ -2085,6 +2275,12 @@ private:
                     break;
                 case bots::Act::Nuke:
                     if (decide && nukeNow && tryNuke(bot, PMob, now))
+                    {
+                        return true;
+                    }
+                    break;
+                case bots::Act::Shadows:
+                    if (tick && tryShadows(bot, now))
                     {
                         return true;
                     }
@@ -2148,8 +2344,9 @@ private:
         return false;
     }
 
-    // A healer whose patient is out of cast range walks to them (set by tryHeal). Returns
-    // true while it is walking.
+    // A healer whose patient is out of cast range walks to them (set by tryHeal and
+    // tryCleanse), and so does a bard to the members who lack a song (trySong). Returns true
+    // while it is walking.
     auto walkToPatient(Bot& bot, const timer::time_point now) -> bool
     {
         if (bot.patientId == 0)
@@ -2173,8 +2370,14 @@ private:
             }
         }
 
-        if (PPatient == nullptr || isWithinDistance(PBot->loc.p, PPatient->loc.p, kCastRange - 2.0f))
+        if (PPatient == nullptr || isWithinDistance(PBot->loc.p, PPatient->loc.p, bot.patientReach - 2.0f))
         {
+            if (PPatient != nullptr)
+            {
+                // There: cast on the next tick, before following or spacing moves it away
+                bot.nextDecision = now;
+            }
+
             bot.patientId = 0;
             return false;
         }
@@ -2185,7 +2388,7 @@ private:
         {
             bot.nextRepath = now + kRepathInterval;
 
-            if (!PPath->PathAround(PPatient->loc.p, kCastRange - 4.0f, PATHFLAG_RUN))
+            if (!PPath->PathAround(PPatient->loc.p, std::max(bot.patientReach - 4.0f, 1.0f), PATHFLAG_RUN))
             {
                 bot.patientId = 0;
                 return false;
@@ -2643,7 +2846,7 @@ private:
         const auto text = plainName(what);
         if (text.empty())
         {
-            return kind == Order::Kind::WeaponSkill ? "!ws <bot> \"<weapon skill>\"" : "!ja <bot> \"<job ability>\"";
+            return kind == Order::Kind::WeaponSkill ? "!ws <bot> \"<weapon skill>\"" : kind == Order::Kind::Spell ? "!ma <bot> \"<spell or song>\"" : "!ja <bot> \"<job ability>\"";
         }
 
         auto* PCursor = dynamic_cast<CBattleEntity*>(PPlayer->GetEntity(PPlayer->m_TargID));
@@ -2652,6 +2855,11 @@ private:
         order.kind     = kind;
         order.playerId = PPlayer->id;
         order.until    = timer::now() + kOrderLife;
+
+        if (kind == Order::Kind::Spell)
+        {
+            return giveSpellOrder(bot, PPlayer, PCursor, what, order);
+        }
 
         CBattleEntity* PTarget = nullptr;
 
@@ -2799,6 +3007,214 @@ private:
         return fmt::format("{}: {} > {}", PBot->getName(), order.name, PTarget->getName());
     }
 
+    // "Army's Paeon" is armys_paeon in spell_list
+    static auto plainSpellName(const std::string& name) -> std::string
+    {
+        auto plain = plainName(name);
+        std::erase(plain, '\'');
+        std::erase(plain, ':'); // "Utsusemi: Ichi" is utsusemi_ichi
+        return plain;
+    }
+
+    // How many songs of one bard stay on a target: two with an instrument, one without
+    // (CLuaBaseEntity::addBardSong)
+    static auto songLimit(CCharEntity* PBot) -> size_t
+    {
+        const auto* PItem      = dynamic_cast<CItemWeapon*>(PBot->getEquip(SLOT_RANGED));
+        const bool  instrument = PItem != nullptr && (PItem->getSkillType() == xi::SkillType::StringInstrument || PItem->getSkillType() == xi::SkillType::WindInstrument);
+
+        return static_cast<size_t>(std::max<int32>(1, (instrument ? 2 : 1) + PBot->getMod(xi::Mod::MAXIMUM_SONGS_BONUS)));
+    }
+
+    // The songs the bot keeps up, for messages
+    static auto songList(const Bot& bot) -> std::string
+    {
+        std::string names;
+
+        for (const auto& song : bot.songs)
+        {
+            if (auto* PSpell = spell::GetSpell(static_cast<SpellID>(song.spellId)))
+            {
+                names += (names.empty() ? "" : ", ") + plainName(PSpell->getName());
+            }
+        }
+
+        return names;
+    }
+
+    // !ma: a spell or a song. A song for the party is also added to the songs the bard keeps
+    // up; "stop" empties that list.
+    auto giveSpellOrder(Bot& bot, CCharEntity* PPlayer, CBattleEntity* PCursor, const std::string& what, Order order) -> std::string
+    {
+        auto*      PBot = bot.PChar.get();
+        const auto text = plainSpellName(what);
+
+        if (startsWithName(text, "stop"))
+        {
+            if (bot.songs.empty())
+            {
+                return fmt::format("{} is not keeping up any song.", PBot->getName());
+            }
+
+            bot.songs.clear();
+            return fmt::format("{} stops singing.", PBot->getName());
+        }
+
+        if (bot.kitDirty)
+        {
+            // Also learns the spells of its level, when that is turned on
+            buildKit(bot);
+        }
+
+        // The longest name that fits. A longer name the bot can't cast wins over a shorter
+        // one it can: "cure iii" is not answered with Cure.
+        CSpell* PSpell   = nullptr;
+        CSpell* PUnknown = nullptr;
+        size_t  best     = 0;
+        size_t  unknown  = 0;
+
+        for (uint16 id = 1; id < MAX_SPELL_ID; ++id)
+        {
+            auto* PCandidate = spell::GetSpell(static_cast<SpellID>(id));
+            if (PCandidate == nullptr || PCandidate->getSpellGroup() == SPELLGROUP_TRUST)
+            {
+                continue;
+            }
+
+            const auto name = plainSpellName(PCandidate->getName());
+            if (!startsWithName(text, name))
+            {
+                continue;
+            }
+
+            if (!charutils::hasSpell(PBot, id) || !spell::CanUseSpell(PBot, PCandidate))
+            {
+                if (name.size() > unknown)
+                {
+                    unknown  = name.size();
+                    PUnknown = PCandidate;
+                }
+            }
+            else if (name.size() > best)
+            {
+                best   = name.size();
+                PSpell = PCandidate;
+            }
+        }
+
+        if (PSpell == nullptr || unknown > best)
+        {
+            return PUnknown != nullptr ? fmt::format("{} can't cast {} (not learned, or not at its level).", PBot->getName(), plainName(PUnknown->getName()))
+                                       : fmt::format("No spell called {}.", what);
+        }
+
+        const auto spellId = static_cast<uint16>(PSpell->getID());
+
+        order.id    = spellId;
+        order.name  = plainName(PSpell->getName());
+        order.until = timer::now() + kSpellOrderLife;
+
+        if (PBot->StatusEffectContainer->HasStatusEffect({ xi::StatusEffect::Silence, xi::StatusEffect::Mute }))
+        {
+            return fmt::format("{} is silenced.", PBot->getName());
+        }
+
+        if (isNinjutsu(PSpell))
+        {
+            if (!battleutils::HasNinjaTool(PBot, PSpell, false))
+            {
+                return fmt::format("{} has no ninja tool for {}.", PBot->getName(), order.name);
+            }
+        }
+        else if (PBot->health.mp < PSpell->getMPCost())
+        {
+            return fmt::format("{} has {} MP, {} needs {}.", PBot->getName(), PBot->health.mp, order.name, PSpell->getMPCost());
+        }
+
+        // A song sung for the party goes on the bard and reaches who is around it
+        const auto valid  = PSpell->getValidTarget();
+        const auto effect = PSpell->getSpellGroup() == SPELLGROUP_SONG ? bots::songEffect(spellId) : xi::StatusEffect::None;
+        const bool area   = effect != xi::StatusEffect::None && PSpell->getAOE() != SPELLAOE_NONE;
+
+        // Else the player's target when the spell can be cast on it, the player, the bot
+        // itself, or what the party is fighting
+        CBattleEntity* PTarget = nullptr;
+
+        if (area)
+        {
+            PTarget = PBot;
+        }
+        else if (PCursor != nullptr && PCursor != PBot && PCursor->ValidTarget(PBot, valid))
+        {
+            PTarget = PCursor;
+        }
+        else if (PCursor == PBot && (valid & TARGET_SELF) != 0)
+        {
+            PTarget = PBot;
+        }
+        else if (PPlayer->ValidTarget(PBot, valid))
+        {
+            PTarget = PPlayer;
+        }
+        else if ((valid & TARGET_SELF) != 0)
+        {
+            PTarget = PBot;
+        }
+        else if ((valid & TARGET_ENEMY) != 0)
+        {
+            if (auto* PLeader = partyLeaderOf(PBot))
+            {
+                PTarget = fightTarget(bot, PLeader);
+            }
+        }
+
+        if (PTarget == nullptr)
+        {
+            return fmt::format("Target something {} can be cast on.", order.name);
+        }
+
+        std::string keeping;
+
+        if (effect != xi::StatusEffect::None)
+        {
+            // One song per effect, and no more songs than stay on a target
+            std::erase_if(bot.songs, [effect](const Song& song)
+            {
+                return song.effect == effect;
+            });
+
+            const auto limit = songLimit(PBot);
+            while (bot.songs.size() >= limit)
+            {
+                bot.songs.erase(bot.songs.begin());
+            }
+
+            bot.songs.emplace_back(Song{ spellId, effect, area ? 0 : PTarget->id });
+            keeping = fmt::format(" Keeping up: {}.", songList(bot));
+        }
+
+        int64 wait = 0;
+
+        if (const auto* PRecast = PBot->PRecastContainer->GetRecast(xi::RecastType::Magic, static_cast<xi::Recast>(spellId)))
+        {
+            wait = std::max<int64>(timer::count_seconds(std::chrono::ceil<std::chrono::seconds>(PRecast->TimeStamp - timer::now() + PRecast->RecastTime)), 0);
+        }
+
+        if (wait > 0)
+        {
+            // Not an order then: a song it keeps up is sung as soon as it is ready
+            return effect != xi::StatusEffect::None ? fmt::format("{} can sing {} again in {} s.{}", PBot->getName(), order.name, wait, keeping)
+                                                    : fmt::format("{} can cast {} again in {} s.", PBot->getName(), order.name, wait);
+        }
+
+        order.targetId = PTarget->id;
+        order.targid   = PTarget->targid;
+        bot.order      = order;
+
+        ShowInfoFmt("bot_players: {} orders {} to cast {} on {}", PPlayer->getName(), PBot->getName(), order.name, PTarget->getName());
+        return fmt::format("{}: {} > {}.{}", PBot->getName(), order.name, PTarget->getName(), keeping);
+    }
+
     void dropOrder(Bot& bot, const std::string& why)
     {
         tellPlayer(bot.order.playerId, fmt::format("{} did not use {}: {}", bot.PChar->getName(), bot.order.name, why));
@@ -2880,6 +3296,66 @@ private:
             if (PBot->PAI->Ability(EntityId(PTarget), order.id))
             {
                 showAction(bot, order.name, PTarget, now);
+                bot.order = Order{};
+            }
+
+            return true;
+        }
+
+        if (order.kind == Order::Kind::Spell)
+        {
+            auto* PSpell = spell::GetSpell(static_cast<SpellID>(order.id));
+            if (PSpell == nullptr)
+            {
+                bot.order = Order{};
+                return false;
+            }
+
+            if (PBot->StatusEffectContainer->HasStatusEffect({ xi::StatusEffect::Silence, xi::StatusEffect::Mute }))
+            {
+                dropOrder(bot, "it is silenced.");
+                return false;
+            }
+
+            if (isNinjutsu(PSpell))
+            {
+                if (!battleutils::HasNinjaTool(PBot, PSpell, false))
+                {
+                    dropOrder(bot, "no ninja tool for it.");
+                    return false;
+                }
+            }
+            else if (PBot->health.mp < PSpell->getMPCost())
+            {
+                dropOrder(bot, "not enough MP.");
+                return false;
+            }
+
+            const float range = std::min(PSpell->getRange(), kCastRange);
+
+            if (PTarget != PBot && !isWithinDistance(PBot->loc.p, PTarget->loc.p, range - 1.0f))
+            {
+                approach(range - 3.0f);
+                return true;
+            }
+
+            // Between two spells, or unable to act: wait
+            if (now < bot.nextCast || now < bot.unableUntil || PBot->StatusEffectContainer->HasPreventActionEffect() ||
+                PBot->PRecastContainer->HasRecast(xi::RecastType::Magic, static_cast<xi::Recast>(order.id), 0s))
+            {
+                stop(bot);
+                return true;
+            }
+
+            face();
+
+            if (cast(bot, PTarget, PSpell, now))
+            {
+                if (const auto effect = bots::songEffect(order.id); effect != xi::StatusEffect::None)
+                {
+                    remember(PBot->id, effect, now + kSongRetry);
+                }
+
                 bot.order = Order{};
             }
 
@@ -3192,29 +3668,78 @@ private:
 
     // Walks into melee range of the target and faces it. The attack state (ticked by the
     // zone, like a player's) swings when the weapon delay is up.
+    //
+    // Each bot has its own spot around the enemy, so they don't stand on one another: the
+    // side the leader fights from (else the side the bot came from) turned by the bot's
+    // share of kMeleeSpread. The direction is fixed for the fight, so nobody shuffles when
+    // the leader moves; the spot follows the enemy. A bot goes for its spot once each time
+    // it has to walk up to the enemy, and stays wherever in range that leaves it.
     void melee(Bot& bot, const CBattleEntity* PTarget, const timer::time_point now)
     {
         auto* PBot  = bot.PChar.get();
         auto* PPath = PBot->PAI->PathFind.get();
 
-        const float range = PBot->GetMeleeRange(PTarget);
+        const float range   = PBot->GetMeleeRange(PTarget);
+        const float standAt = std::max(range - kMeleeInside, 0.5f);
+        const bool  inRange = isWithinDistance(PBot->loc.p, PTarget->loc.p, range - kMeleeMargin);
+        const bool  moving  = PPath->IsFollowingPath();
 
-        if (!isWithinDistance(PBot->loc.p, PTarget->loc.p, range - kMeleeMargin))
+        if (bot.meleeFor != PTarget->id)
         {
-            const bool moving = PPath->IsFollowingPath();
+            bot.meleeFor     = PTarget->id;
+            bot.meleeAimed   = false;
+            bot.meleeSettled = false;
 
+            const auto* PLeader = partyLeaderOf(PBot);
+            const auto& from    = PLeader != nullptr && PLeader != PBot && PLeader->GetBattleTarget() == PTarget &&
+                                          isWithinDistance(PLeader->loc.p, PTarget->loc.p, range + 3.0f)
+                                      ? PLeader->loc.p
+                                      : PBot->loc.p;
+
+            const auto  slot   = followSlot(bot);
+            const float turn   = kMeleeSpread * static_cast<float>(slot / 2 + 1) * (slot % 2 == 0 ? 1.0f : -1.0f);
+            const float jitter = (static_cast<float>(botHash(PBot->id, 16)) / 127.5f - 1.0f) * kMeleeSpreadJitter;
+
+            bot.meleeAngle = std::atan2(from.z - PTarget->loc.p.z, from.x - PTarget->loc.p.x) + (turn + jitter) * static_cast<float>(M_PI) / 180.0f;
+        }
+
+        if (!inRange && !moving)
+        {
+            // The enemy moved away (or the fight just started): walk up to it again
+            bot.meleeAimed   = false;
+            bot.meleeSettled = false;
+        }
+        else if (inRange && !moving && bot.meleeAimed)
+        {
+            bot.meleeSettled = true;
+        }
+
+        if (!inRange || !bot.meleeSettled)
+        {
             if (now >= bot.nextRepath && (!moving || !isWithinDistance(bot.pathGoal, PTarget->loc.p, kTargetDrift)))
             {
                 bot.nextRepath = now + kRepathInterval;
 
-                if (PPath->PathAround(PTarget->loc.p, std::max(range - kMeleeInside, 0.5f), PATHFLAG_RUN))
+                position_t spot = PTarget->loc.p;
+                spot.x += std::cos(bot.meleeAngle) * standAt;
+                spot.z += std::sin(bot.meleeAngle) * standAt;
+
+                // Its own spot; anywhere in range when that one can't be walked to
+                if ((PBot->loc.zone->navMesh()->validPosition(spot) && PPath->PathTo(spot, PATHFLAG_RUN)) ||
+                    PPath->PathAround(PTarget->loc.p, standAt, PATHFLAG_RUN))
                 {
                     bot.pathGoal = PTarget->loc.p;
                 }
+
+                bot.meleeAimed = true;
             }
 
             step(bot, now);
-            return;
+
+            if (!inRange || PPath->IsFollowingPath())
+            {
+                return;
+            }
         }
 
         stop(bot);
@@ -3230,10 +3755,50 @@ private:
     // Spells
     //
 
+    // Testing aid (custom.BOT_AUTO_LEARN_SPELLS): the bot knows every spell its job and
+    // subjob have at its level, as if it had used the scrolls. Only in memory: char_spells
+    // keeps what it really learned, which is all it knows again once this is turned off.
+    static void learnSpells(CCharEntity* PBot)
+    {
+        const auto mainJob   = PBot->GetMJob();
+        const auto subJob    = PBot->GetSJob();
+        const auto mainLevel = PBot->GetMLevel();
+        const auto subLevel  = PBot->GetSLevel();
+
+        int32 learned = 0;
+
+        for (uint16 id = 1; id < MAX_SPELL_ID; ++id)
+        {
+            auto* PSpell = spell::GetSpell(static_cast<SpellID>(id));
+            if (PSpell == nullptr || PSpell->getSpellGroup() == SPELLGROUP_TRUST || charutils::hasSpell(PBot, id))
+            {
+                continue;
+            }
+
+            const auto mainAt = PSpell->getJob(mainJob);
+            const auto subAt  = PSpell->getJob(subJob);
+
+            if ((mainAt > 0 && mainAt <= mainLevel) || (subAt > 0 && subAt <= subLevel))
+            {
+                learned += charutils::addSpell(PBot, id);
+            }
+        }
+
+        if (learned > 0)
+        {
+            ShowInfoFmt("bot_players: {} knows {} more spells (BOT_AUTO_LEARN_SPELLS)", PBot->getName(), learned);
+        }
+    }
+
     // Works out which spells of bot_roles.h the bot can cast at its level.
     void buildKit(Bot& bot)
     {
         auto* PBot = bot.PChar.get();
+
+        if (autoLearn_)
+        {
+            learnSpells(PBot);
+        }
 
         bot.kitDirty = false;
         bot.role     = &bots::roleFor(PBot->GetMJob());
@@ -3292,8 +3857,36 @@ private:
             }
         }
 
+        for (size_t i = 0; i < bots::kCleanses.size(); ++i)
+        {
+            kit.cleanse[i] = knows(bots::kCleanses[i].spell);
+            kit.cleanses |= kit.cleanse[i];
+        }
+
+        kit.erase = knows(bots::kErase);
+        kit.cleanses |= kit.erase;
+
+        if (PBot->GetMJob() == xi::Job::BRD || PBot->GetSJob() == xi::Job::BRD)
+        {
+            for (uint16 spellId = bots::kFirstSong; spellId <= bots::kLastSong && !kit.songs; ++spellId)
+            {
+                kit.songs = knows(spellId);
+            }
+        }
+
+        for (size_t i = 0; i < bots::kShadows.size(); ++i)
+        {
+            kit.shadows[i] = knows(bots::kShadows[i]) ? bots::kShadows[i] : 0;
+        }
+
+        // Songs it was keeping up and can't sing any more (job change, level sync)
+        std::erase_if(bot.songs, [&knows](const Song& song)
+        {
+            return !knows(song.spellId);
+        });
+
         kit.dispel = knows(bots::kDispel);
-        kit.any |= kit.hasCure || kit.dispel || !kit.nukes.empty();
+        kit.any |= kit.hasCure || kit.dispel || !kit.nukes.empty() || kit.cleanses || kit.songs;
     }
 
     // Able to start a spell right now, whatever spell
@@ -3301,13 +3894,20 @@ private:
     {
         auto* PBot = bot.PChar.get();
 
-        return bot.kit.any && now >= bot.nextCast && now >= bot.unableUntil && PBot->health.mp > 0 &&
+        // Songs cost no MP
+        return bot.kit.any && now >= bot.nextCast && now >= bot.unableUntil && (PBot->health.mp > 0 || bot.kit.songs) &&
                !PBot->StatusEffectContainer->HasStatusEffect({ xi::StatusEffect::Silence, xi::StatusEffect::Mute }) &&
                !PBot->StatusEffectContainer->HasPreventActionEffect();
     }
 
-    // The spell, if `PChar` has the MP for it while keeping `reservePct` of its pool, and it
-    // is not on recast.
+    // Ninjutsu costs a ninja tool instead of MP: spell_list.mpCost holds the tool's item id
+    static auto isNinjutsu(CSpell* PSpell) -> bool
+    {
+        return PSpell->getSpellGroup() == SPELLGROUP_NINJUTSU;
+    }
+
+    // The spell, if `PChar` has the MP for it while keeping `reservePct` of its pool (for
+    // ninjutsu: the tool in its inventory), and it is not on recast.
     static auto ready(CCharEntity* PChar, const uint16 spellId, const uint8 reservePct, const bool recastToo = true) -> CSpell*
     {
         auto* PSpell = spell::GetSpell(static_cast<SpellID>(spellId));
@@ -3316,10 +3916,20 @@ private:
             return nullptr;
         }
 
-        const int32 left = PChar->health.mp - PSpell->getMPCost();
-        if (left < 0 || left * 100 < reservePct * PChar->GetMaxMP())
+        if (isNinjutsu(PSpell))
         {
-            return nullptr;
+            if (!battleutils::HasNinjaTool(PChar, PSpell, false))
+            {
+                return nullptr;
+            }
+        }
+        else
+        {
+            const int32 left = PChar->health.mp - PSpell->getMPCost();
+            if (left < 0 || left * 100 < reservePct * PChar->GetMaxMP())
+            {
+                return nullptr;
+            }
         }
 
         if (recastToo && PChar->PRecastContainer->HasRecast(xi::RecastType::Magic, static_cast<xi::Recast>(spellId), 0s))
@@ -3571,6 +4181,7 @@ private:
         if (!isWithinDistance(PBot->loc.p, pick->PEntity->loc.p, kCastRange))
         {
             bot.patientId    = pick->PEntity->id;
+            bot.patientReach = kCastRange;
             bot.patientUntil = now + kHealWalkLife;
             return walkToPatient(bot, now);
         }
@@ -3597,6 +4208,293 @@ private:
         }
 
         return PBest != nullptr && cast(bot, pick->PEntity, PBest, now);
+    }
+
+    // Status removal: the first ailment of bots::kCleanses a party member has and the bot has
+    // the spell for, then Erase for anything else erasable. One bot per ailment: the best
+    // healer that can reach the member, and nobody while the spell is already on its way.
+    auto tryCleanse(Bot& bot, const timer::time_point now) -> bool
+    {
+        if (!bot.kit.cleanses)
+        {
+            return false;
+        }
+
+        auto* PBot = bot.PChar.get();
+
+        // `ailmentOf(member)`: the ailment this spell would take off them, if any.
+        // `otherHas(bot)`: whether another bot has the spell.
+        const auto treat = [&](const uint16 spellId, const auto& ailmentOf, const auto& otherHas) -> bool
+        {
+            auto* PSpell = ready(PBot, spellId, 0);
+            if (PSpell == nullptr)
+            {
+                return false;
+            }
+
+            for (auto* PMember : PBot->PParty->members)
+            {
+                if (PMember->isDead() || PMember->loc.zone != PBot->loc.zone || !isWithinDistance(PBot->loc.p, PMember->loc.p, kHealReach))
+                {
+                    continue;
+                }
+
+                const std::optional<xi::StatusEffect> ailment = ailmentOf(PMember);
+                if (!ailment || wasTried(PMember->id, *ailment, now))
+                {
+                    continue;
+                }
+
+                bool covered = false;
+
+                forEachCast(PBot, [&](CBattleEntity*, CSpell* PCasting, const uint32 targetId)
+                {
+                    covered |= targetId == PMember->id && static_cast<uint16>(PCasting->getID()) == spellId;
+                });
+
+                if (covered)
+                {
+                    continue;
+                }
+
+                const auto* PBetter = betterBot(bot, now, [](const bots::Role& role) { return role.healRank; }, [&](const Bot& other)
+                {
+                    return otherHas(other) && isWithinDistance(other.PChar->loc.p, PMember->loc.p, kCastRange) &&
+                           ready(other.PChar.get(), spellId, 0) != nullptr;
+                });
+
+                if (PBetter != nullptr)
+                {
+                    continue;
+                }
+
+                if (!isWithinDistance(PBot->loc.p, PMember->loc.p, kCastRange))
+                {
+                    bot.patientId    = PMember->id;
+                    bot.patientReach = kCastRange;
+                    bot.patientUntil = now + kHealWalkLife;
+                    return walkToPatient(bot, now);
+                }
+
+                if (cast(bot, PMember, PSpell, now))
+                {
+                    remember(PMember->id, *ailment, now + kCleanseRetry);
+                    return true;
+                }
+
+                return false;
+            }
+
+            return false;
+        };
+
+        for (size_t i = 0; i < bots::kCleanses.size(); ++i)
+        {
+            if (!bot.kit.cleanse[i])
+            {
+                continue;
+            }
+
+            const auto& line = bots::kCleanses[i];
+
+            const auto ailmentOf = [&line](CBattleEntity* PMember) -> std::optional<xi::StatusEffect>
+            {
+                for (const auto effect : line.effects)
+                {
+                    if (effect != xi::StatusEffect::None && PMember->StatusEffectContainer->HasStatusEffect(effect))
+                    {
+                        return effect;
+                    }
+                }
+
+                return std::nullopt;
+            };
+
+            if (treat(line.spell, ailmentOf, [i](const Bot& other) { return other.kit.cleanse[i]; }))
+            {
+                return true;
+            }
+        }
+
+        if (!bot.kit.erase)
+        {
+            return false;
+        }
+
+        // Kept under StatusEffect::None: Erase takes off whichever erasable effect it finds
+        const auto erasable = [](CBattleEntity* PMember) -> std::optional<xi::StatusEffect>
+        {
+            if (PMember->StatusEffectContainer->HasStatusEffectByFlag(xi::StatusEffectFlag::Erasable))
+            {
+                return xi::StatusEffect::None;
+            }
+
+            return std::nullopt;
+        };
+
+        return treat(bots::kErase, erasable, [](const Bot& other) { return other.kit.erase; });
+    }
+
+    // How long this bard's song of `effect` still lasts on a member; nothing when it is not
+    // on them. A song effect carries its singer's id (16 bits of it) as sub id.
+    static auto songLeft(CBattleEntity* PMember, const CCharEntity* PBard, const xi::StatusEffect effect, const timer::time_point now) -> std::optional<timer::duration>
+    {
+        std::optional<timer::duration> left;
+
+        PMember->StatusEffectContainer->ForEachEffect([&](CStatusEffect& existing)
+        {
+            if (existing.GetStatusID() == effect && static_cast<uint16>(existing.GetSubID()) == static_cast<uint16>(PBard->id))
+            {
+                left = existing.GetStartTime() + existing.GetDuration() - now;
+            }
+        });
+
+        return left;
+    }
+
+    struct SongPick
+    {
+        CSpell*          PSpell  = nullptr;
+        CBattleEntity*   PTarget = nullptr; // Who it is cast on: the bard itself for a party song
+        CBattleEntity*   PNear   = nullptr; // Who the bard has to walk up to first, if anybody
+        xi::StatusEffect effect  = xi::StatusEffect::None;
+    };
+
+    // The song the bard would sing now: the first one it keeps up that a member in reach
+    // lacks. With `waiting`, also one whose recast is still running.
+    auto pickSong(Bot& bot, const timer::time_point now, const bool waiting) -> SongPick
+    {
+        auto* PBot = bot.PChar.get();
+
+        if (bot.songs.empty() || PBot->PParty == nullptr || inTown(PBot))
+        {
+            return SongPick{};
+        }
+
+        for (const auto& song : bot.songs)
+        {
+            if (wasTried(PBot->id, song.effect, now))
+            {
+                continue;
+            }
+
+            auto* PSpell = ready(PBot, song.spellId, 0, !waiting);
+            if (PSpell == nullptr)
+            {
+                continue;
+            }
+
+            std::vector<CBattleEntity*> lacking;
+
+            for (auto* PMember : PBot->PParty->members)
+            {
+                if (PMember->isDead() || PMember->loc.zone != PBot->loc.zone || !isWithinDistance(PBot->loc.p, PMember->loc.p, kHealReach) ||
+                    (song.targetId != 0 && PMember->id != song.targetId))
+                {
+                    continue;
+                }
+
+                const auto left = songLeft(PMember, PBot, song.effect, now);
+                if (!left || *left < kSongRefresh)
+                {
+                    lacking.emplace_back(PMember);
+                }
+            }
+
+            if (lacking.empty())
+            {
+                continue;
+            }
+
+            if (song.targetId != 0)
+            {
+                auto* PMember = lacking.front();
+                return SongPick{ PSpell, PMember, isWithinDistance(PBot->loc.p, PMember->loc.p, kCastRange) ? nullptr : PMember, song.effect };
+            }
+
+            // Stand where the song reaches the most members who lack it; the nearest such spot
+            CBattleEntity* PAnchor = lacking.front();
+            size_t         most    = 0;
+
+            for (auto* PMember : lacking)
+            {
+                const auto count = static_cast<size_t>(std::ranges::count_if(lacking, [PMember](const CBattleEntity* POther)
+                {
+                    return isWithinDistance(PMember->loc.p, POther->loc.p, kSongCluster);
+                }));
+
+                if (count > most || (count == most && distance(PBot->loc.p, PMember->loc.p) < distance(PBot->loc.p, PAnchor->loc.p)))
+                {
+                    most    = count;
+                    PAnchor = PMember;
+                }
+            }
+
+            return SongPick{ PSpell, PBot, isWithinDistance(PBot->loc.p, PAnchor->loc.p, kSongReach) ? nullptr : PAnchor, song.effect };
+        }
+
+        return SongPick{};
+    }
+
+    // The Shadows rule: Utsusemi on itself once the last shadow is gone (casting Ichi over
+    // Ni's shadows does nothing and still uses a tool), with the best tier that is off
+    // recast and that it holds a tool for. In and out of a fight, not in town.
+    auto tryShadows(Bot& bot, const timer::time_point now) -> bool
+    {
+        auto* PBot = bot.PChar.get();
+
+        if (inTown(PBot) || now < bot.nextCast || now < bot.unableUntil ||
+            PBot->StatusEffectContainer->HasStatusEffect(xi::StatusEffect::CopyImage) ||
+            PBot->StatusEffectContainer->HasStatusEffect({ xi::StatusEffect::Silence, xi::StatusEffect::Mute }) ||
+            PBot->StatusEffectContainer->HasPreventActionEffect() || wasTried(PBot->id, xi::StatusEffect::CopyImage, now))
+        {
+            return false;
+        }
+
+        for (const auto spellId : bot.kit.shadows)
+        {
+            auto* PSpell = spellId != 0 ? ready(PBot, spellId, 0) : nullptr;
+            if (PSpell == nullptr)
+            {
+                continue;
+            }
+
+            if (cast(bot, PBot, PSpell, now))
+            {
+                remember(PBot->id, xi::StatusEffect::CopyImage, now + kBuffRetry);
+                return true;
+            }
+
+            return false;
+        }
+
+        return false;
+    }
+
+    // The Song rule: keeps up the songs a player asked for with !ma.
+    auto trySong(Bot& bot, const timer::time_point now) -> bool
+    {
+        const auto pick = pickSong(bot, now, false);
+        if (pick.PSpell == nullptr)
+        {
+            return false;
+        }
+
+        if (pick.PNear != nullptr)
+        {
+            bot.patientId    = pick.PNear->id;
+            bot.patientReach = pick.PTarget == bot.PChar.get() ? kSongReach + 1.0f : kCastRange;
+            bot.patientUntil = now + kHealWalkLife;
+            return walkToPatient(bot, now);
+        }
+
+        if (cast(bot, pick.PTarget, pick.PSpell, now))
+        {
+            remember(bot.PChar->id, pick.effect, now + kSongRetry);
+            return true;
+        }
+
+        return false;
     }
 
     // Smart Buff: the first buff of bots::kBuffs that somebody lacks and nobody is casting.
@@ -3684,7 +4582,8 @@ private:
     }
 
     // Whether the bot's job has a Buff rule that applies right now and a buff it has the MP
-    // for is waiting to be cast. Such a bot does not sit down. Looked at once a second.
+    // for is waiting to be cast, or a Song rule and a song to sing again. Such a bot does not
+    // sit down. Looked at once a second.
     auto buffWaiting(Bot& bot, const timer::time_point now) -> bool
     {
         if (now < bot.nextBuffWaitCheck)
@@ -3704,10 +4603,18 @@ private:
 
         for (const auto& rule : bot.role->rules)
         {
-            if (rule.act == bots::Act::Buff && PBot->GetMLevel() <= rule.maxLevel && PBot->GetMPP() >= rule.minMpp)
+            if (PBot->GetMLevel() > rule.maxLevel || PBot->GetMPP() < rule.minMpp)
             {
-                bot.buffWaiting = pickBuff(bot, now, true).PTarget != nullptr;
-                break;
+                continue;
+            }
+
+            if (rule.act == bots::Act::Buff)
+            {
+                bot.buffWaiting |= pickBuff(bot, now, true).PTarget != nullptr;
+            }
+            else if (rule.act == bots::Act::Song)
+            {
+                bot.buffWaiting |= pickSong(bot, now, true).PSpell != nullptr;
             }
         }
 
@@ -4178,6 +5085,7 @@ private:
 
         if (dist > kWarpDistance)
         {
+            ShowInfoFmt("bot_players: {} is {:.0f} yalms from {}, warps to them", PBot->getName(), dist, PLeader->getName());
             PPath->WarpTo(PLeader->loc.p, spot.reach);
             bot.pathFails = 0;
             return;
@@ -4224,9 +5132,15 @@ private:
             }
             else if (++bot.pathFails >= kMaxPathFails)
             {
-                PPath->WarpTo(PLeader->loc.p, spot.reach);
                 bot.pathFails = 0;
-                return;
+
+                // Not into a fight, and not from a few steps away
+                if (!bot.inFight && dist > kWarpMinDistance)
+                {
+                    ShowInfoFmt("bot_players: {} finds no path to {} ({:.0f} yalms), warps to them", PBot->getName(), PLeader->getName(), dist);
+                    PPath->WarpTo(PLeader->loc.p, spot.reach);
+                    return;
+                }
             }
         }
 
@@ -4315,11 +5229,25 @@ private:
 
     void step(Bot& bot, const timer::time_point now)
     {
-        auto* PPath = bot.PChar->PAI->PathFind.get();
+        auto* PBot  = bot.PChar.get();
+        auto* PPath = PBot->PAI->PathFind.get();
 
-        for (int i = 0; i < kStepsPerTick && PPath->IsFollowingPath(); ++i)
+        if (!PPath->IsFollowingPath())
         {
-            PPath->FollowPath(now);
+            return;
+        }
+
+        // One full path step, then what is left of a player's stride at the bot's current
+        // speed (so gravity, bind and movement speed gear all count)
+        const position_t before = PBot->loc.p;
+
+        PPath->FollowPath(now);
+
+        const float left = static_cast<float>(PBot->UpdateSpeed(true)) * kYalmsPerTickPerSpeed - distance(before, PBot->loc.p);
+
+        if (left > 0.05f && PPath->IsFollowingPath())
+        {
+            PPath->FollowPath(now, left);
         }
     }
 
@@ -4540,8 +5468,8 @@ private:
         for (auto& cmd : commands)
         {
             // An anchor overrides an explicit zone/position (for `invite` it is the inviter,
-            // for `trade` the one who offers the trade)
-            if (cmd.anchorCharId != 0 && cmd.command != "invite" && cmd.command != "trade")
+            // for `trade` the one who offers the trade, for `ma` the one who asks)
+            if (cmd.anchorCharId != 0 && cmd.command != "invite" && cmd.command != "trade" && cmd.command != "ma")
             {
                 auto* PAnchor = zoneutils::GetChar(cmd.anchorCharId);
                 if (PAnchor == nullptr || PAnchor->loc.zone == nullptr || live_.contains(cmd.anchorCharId))
@@ -4615,6 +5543,18 @@ private:
             {
                 std::tie(ok, result) = puppetTrade(cmd.charid, cmd.anchorCharId);
             }
+            else if (cmd.command == "ma")
+            {
+                // !ma without a client: `name` is the spell, the anchor the party member asking
+                const auto bot    = live_.find(cmd.charid);
+                const auto puppet = live_.find(cmd.anchorCharId);
+                auto*      PAsker = puppet != live_.end() ? puppet->second.PChar.get() : zoneutils::GetChar(cmd.anchorCharId);
+
+                ok = bot != live_.end() && PAsker != nullptr;
+
+                result = ok ? giveOrder(PAsker, bot->second.PChar->getName(), cmd.name, Order::Kind::Spell)
+                            : "The bot or the character asking is not out.";
+            }
             else if (cmd.command == "move" || cmd.command == "puppet")
             {
                 // Testing aids, see the README
@@ -4681,7 +5621,7 @@ private:
 
         if ((job < 1 || job > 6) && advancedJob == nullptr)
         {
-            return { false, "Bots can start as WAR, MNK, WHM, BLM, RDM, THF, RNG, SAM or NIN." };
+            return { false, "Bots can start as WAR, MNK, WHM, BLM, RDM, THF, BRD, RNG, SAM or NIN." };
         }
 
         if (level < 1 || level > kMaxLevel)
@@ -4741,8 +5681,9 @@ private:
         {
             // The char_insert trigger leaves advanced jobs locked and at level 0
             ok = !!db::preparedStmt("UPDATE char_jobs SET unlocked = unlocked | ?, "
-                                    "rng = IF(? = 11, 1, rng), sam = IF(? = 12, 1, sam), nin = IF(? = 13, 1, nin) WHERE charid = ?",
+                                    "brd = IF(? = 10, 1, brd), rng = IF(? = 11, 1, rng), sam = IF(? = 12, 1, sam), nin = IF(? = 13, 1, nin) WHERE charid = ?",
                                     1U << job,
+                                    job,
                                     job,
                                     job,
                                     job,
@@ -4899,6 +5840,9 @@ private:
         // Players equip their starting weapon and ring themselves; bots can't.
         autoEquipEmptySlots(PBot.get());
 
+        growInventory(PBot.get());
+        stowSpareGear(PBot.get());
+
         // Players get these in xi.player.onGameIn, which bots never go through. Permanent
         // effects survive the bot's zone changes (moveToZone keeps the entity).
         if (luautils::detail::findGlobalLuaFunction("xi.custom.permanentBuffs.apply").valid())
@@ -4950,7 +5894,7 @@ private:
 
         if ((mainJob != 0 && !bots::isBotJob(mainJob)) || (subJob != 0 && subJob != 255 && !bots::isBotJob(subJob)))
         {
-            return { false, "Bot jobs are WAR, MNK, WHM, BLM, RDM, THF, RNG, SAM and NIN." };
+            return { false, "Bot jobs are WAR, MNK, WHM, BLM, RDM, THF, BRD, RNG, SAM and NIN." };
         }
 
         const bool wasLive = live_.contains(charid);
@@ -5089,6 +6033,7 @@ private:
             charutils::LoadJobChangeGear(PBot);
             giveFirstJobGear(PBot);
             autoEquipEmptySlots(PBot);
+            bot.checkItems = true; // the old job's gear is in the inventory now (stowSpareGear)
         }
 
         PBot->StatusEffectContainer->DelStatusEffectsByFlag(xi::StatusEffectFlag::Dispelable | xi::StatusEffectFlag::Roll | xi::StatusEffectFlag::OnJobchange);
@@ -5480,6 +6425,9 @@ private:
 
     // main.CURE_POWER
     float curePower_ = 1.0f;
+
+    // custom.BOT_AUTO_LEARN_SPELLS
+    bool autoLearn_ = false;
 };
 
 REGISTER_CPP_MODULE(BotPlayersModule);

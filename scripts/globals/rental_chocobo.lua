@@ -49,6 +49,11 @@ xi.rentalChocobo.chocoboInfo =
     [xi.zone.NORG]                    = { levelReq = 20, sales = 0, premiumCost = false, past = false, pos = { -456,  17, -348,   0, xi.zone.YUHTUNGA_JUNGLE       } },
 }
 
+-- True when the custom.CHOCOBO_RENTAL_NO_REQUIREMENTS mod is on: no license, no level.
+local noRequirements = function()
+    return xi.settings.custom ~= nil and xi.settings.custom.CHOCOBO_RENTAL_NO_REQUIREMENTS == true
+end
+
 local timeServerCounter = 0
 
 -- This runs on every zone in the xi.rentalChocobo.chocoboInfo global.
@@ -137,8 +142,9 @@ xi.rentalChocobo.renterOnTrade = function(player, npc, trade, eventSucceed, even
     elseif npcUtil.tradeHasExactly(trade, xi.item.CHOCOBO_TICKET) then
         if not info.past then -- Does nothing in past zones
             if
-                player:getMainLvl() >= 20 and
-                player:hasKeyItem(xi.keyItem.CHOCOBO_LICENSE)
+                noRequirements() or
+                (player:getMainLvl() >= 20 and
+                player:hasKeyItem(xi.keyItem.CHOCOBO_LICENSE))
             then
                 local currency = player:getGil()
                 local price    = 0
@@ -171,9 +177,8 @@ xi.rentalChocobo.renterOnTrigger = function(player, npc, eventSucceed, eventFail
 
     -- JP wiki: a gladiator holding the writ is refused a chocobo.
     if
-        player:hasKeyItem(xi.keyItem.CHOCOBO_LICENSE) and
+        (noRequirements() or (player:hasKeyItem(xi.keyItem.CHOCOBO_LICENSE) and mLvl >= info.levelReq)) and
         not player:hasKeyItem(xi.keyItem.GLADIATORIAL_WRIT_OF_SUMMONS) and
-        mLvl >= info.levelReq and
         (player:hasCompletedMission(xi.mission.log_id.WOTG, xi.mission.id.wotg.BACK_TO_THE_BEGINNING) or not info.past)
     then
         if canRace then -- Check if NPC can start A Chocobo Riding Game
@@ -226,7 +231,7 @@ xi.rentalChocobo.renterOnEventFinish = function(player, csid, option, eventSucce
             local price = player:getLocalVar('[CHOCOBO]price')
             player:setLocalVar('[CHOCOBO]price', 0)
 
-            if mLvl >= 20 then
+            if mLvl >= 20 or noRequirements() then
                 duration = (xi.rentalChocobo.rideMinutes + player:getMod(xi.mod.CHOCOBO_RIDING_TIME)) * 60
             end
 

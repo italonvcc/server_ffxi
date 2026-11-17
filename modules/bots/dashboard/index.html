@@ -187,7 +187,7 @@ dd { margin: 0; }
             <select name="job">
               <option value="1">Warrior</option><option value="2">Monk</option><option value="3" selected>White Mage</option>
               <option value="4">Black Mage</option><option value="5">Red Mage</option><option value="6">Thief</option>
-              <option value="11">Ranger</option><option value="12">Samurai</option><option value="13">Ninja</option>
+              <option value="10">Bard</option><option value="11">Ranger</option><option value="12">Samurai</option><option value="13">Ninja</option>
             </select>
           </label>
           <label>Level <input name="level" type="number" min="1" max="99" value="1"></label>
@@ -236,7 +236,7 @@ let state = { bots: [], players: [], commands: [], server: {} };
 let selected = null;
 let zones = [];
 let jobPick = null; // { charid, job, sub }: the job selects of the detail panel
-const BOT_JOBS = [[1, 'WAR'], [2, 'MNK'], [3, 'WHM'], [4, 'BLM'], [5, 'RDM'], [6, 'THF'], [11, 'RNG'], [12, 'SAM'], [13, 'NIN']];
+const BOT_JOBS = [[1, 'WAR'], [2, 'MNK'], [3, 'WHM'], [4, 'BLM'], [5, 'RDM'], [6, 'THF'], [10, 'BRD'], [11, 'RNG'], [12, 'SAM'], [13, 'NIN']];
 let detailBusy = false; // a command from the detail panel is running; don't redraw it
 
 async function api(path, body) {
@@ -391,6 +391,9 @@ async function loadDetail(charid, scroll = true) {
 
     <div class="section-title">Inventory (${b.inventory.length})</div>
     ${b.inventory.length ? b.inventory.map((i) => `<div class="slot"><span>${esc(i.item)}${i.quantity > 1 ? ' ×' + i.quantity : ''}</span>${i.equipped ? '<span class="tag">equipped</span>' : ''}</div>`).join('') : '<div class="sub">Empty</div>'}
+
+    <div class="section-title">Wardrobes (${b.wardrobe.length})</div>
+    ${b.wardrobe.length ? b.wardrobe.map((i) => `<div class="slot"><span>${esc(i.item)}</span><span><span class="k">W${i.wardrobe}</span>${i.equipped ? ' <span class="tag">equipped</span>' : ''}</span></div>`).join('') : '<div class="sub">Empty</div>'}
   `;
   $('detail-body').querySelectorAll('button[data-cmd]').forEach((btn) => btn.addEventListener('click', () => runDetailCommand(b, btn.dataset.cmd)));
   $('autospawn-toggle').addEventListener('change', (e) => runDetailCommand(b, 'autospawn', { autospawn: e.target.checked }));

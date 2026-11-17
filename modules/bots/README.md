@@ -10,9 +10,9 @@ party members for soloing on a private server: bots that follow, heal and fight.
 
 | Works | Not done yet |
 | --- | --- |
-| Bots are real `chars` rows, spawned into zones as PCs (0x00D packets, white names) | Opening a skillchain, weapon skills outside one, job abilities other than Provoke, Curaga, status removal (-na, Erase), Raise, sleep/crowd control |
+| Bots are real `chars` rows, spawned into zones as PCs (0x00D packets, white names) | Opening a skillchain, weapon skills outside one, job abilities other than Provoke, Curaga, Raise, sleep/crowd control, songs sung at an enemy (only on request) |
 | New bots get the normal new-character setup (`xi.player.charCreate`): race gear, job weapon, nation ring, gil, home point | `/tell` to a bot (routed, unanswered, untested) |
-| Starting weapon/ring auto-equipped; inspect shows real gear | Bots can start as WAR/MNK/WHM/BLM/RDM/THF and RNG/SAM/NIN; other jobs need starting gear and an unlock (see "First spawn") |
+| Starting weapon/ring auto-equipped; inspect shows real gear | Bots can start as WAR/MNK/WHM/BLM/RDM/THF and BRD/RNG/SAM/NIN; other jobs need starting gear and an unlock (see "First spawn") |
 | Gear traded to a bot is put on; what it can't wear and what it replaced goes back to the player. Traded food is eaten and re-eaten | Subjobs; choosing gear by itself (it wears whatever it is handed) |
 | Ranger shoots, keeps its distance, re-equips the best arrows it carries, melees without ammo | Trading, food and the Ranger are untested (see "Not checked") |
 | Bots with `autospawn = 1` spawn at their saved position on server boot | Gil from kills is still split with bots (`charutils::DistributeGil`, core) |
@@ -20,7 +20,7 @@ party members for soloing on a private server: bots that follow, heal and fight.
 | Web dashboard: create, inspect, spawn/despawn, move next to a player, autospawn, delete | Multi map-process setups (only tested with one xi_map hosting all zones) |
 | In-game `!bot list/spawn/despawn/here` | Alliances (alliance invites are declined) |
 | **AI:** accepts party invites, follows the party leader (also into other zones), walks home when it has no party | Following into Mog Houses and instances (the bot waits outside) |
-| **AI per job** (`cpp/bot_roles.h`): White Mage, Red Mage and Black Mage have rule lists of heal, buff, debuff, nuke, melee, rest; other jobs fight and cure. Bots coordinate so they don't overheal or double up | Rule lists for the other jobs; bots stand on the same spot when they melee the same target |
+| **AI per job** (`cpp/bot_roles.h`): White Mage, Red Mage and Black Mage have rule lists of heal, buff, debuff, nuke, melee, rest; a Bard keeps up the songs it is asked for and plays its subjob; a Ninja keeps Utsusemi up while it holds Shihei; other jobs fight and cure. Any bot with a -na spell or Erase removes ailments. Bots coordinate so they don't overheal or double up | Rule lists for the other jobs |
 | **AI:** takes a Raise or gets up by itself when knocked out | The per-job AI is untested in a fight (see "Not checked") |
 | **AI:** accepts trades, passes on loot (a lone player gets every drop), learns scrolls it carries | In-client checks of all of the above (see "Not checked in a client") |
 | Exp, levels and skill-ups work like a player's; the dashboard shows exp, skills and spells | |
@@ -38,7 +38,7 @@ modules/bots/
   market/load_snapshot.py  imports scraper dumps, builds data/snapshot.json, fills bot_market_prices
   market/data/             the snapshot (browse_raw.json, sales_raw.json, snapshot.json)
   lua/bot_command.lua      !bot GM command (permission 0)
-  lua/bot_orders.lua       !ja and !ws: tell a bot to use an ability or weapon skill
+  lua/bot_orders.lua       !ja, !ws and !ma: tell a bot to use an ability, weapon skill or spell
   sql/bot_players.sql      bot_players + bot_commands tables (also auto-created, see below)
   dashboard/dashboard.py   local web dashboard (Python stdlib + mariadb connector)
   dashboard/index.html     dashboard page (vanilla JS, no build step)
@@ -72,9 +72,9 @@ the Lua needs a map server restart (or file-watch reload). CMake only re-globs w
 6. **First spawn.** If the character lacks title 206 (`NEW_ADVENTURER`), the module calls
    `xi.player.charCreate` like a first login, then sets the level (if > 1) and equips
    anything in the inventory that fits an empty slot. `charCreate` only knows the six
-   starting jobs, so for RNG, SAM and NIN `create` unlocks the job and sets it to level 1
+   starting jobs, so for BRD, RNG, SAM and NIN `create` unlocks the job and sets it to level 1
    in `char_jobs`, and `spawn` adds the weapons of `bots::kStarterGear` (`bot_roles.h`):
-   Shortbow, 99 Wooden Arrows and a Bronze Axe; Mumeito (the only level 1 great katana);
+   Maple Harp and Bronze Knife; Shortbow, 99 Wooden Arrows and a Bronze Axe; Mumeito (the only level 1 great katana);
    a Kunai. Core change for this: `scripts/globals/player.lua` tolerates a job with no
    starting gear (`startingJobGear[job] or {}`), instead of throwing before the ring and
    title are given.
@@ -107,8 +107,10 @@ ticking (`byZone_` index). Per bot, `think()` does, in order:
    away than its spot (so turning on the spot moves nobody), then waits up to 0.5 s, each
    bot its own time, before setting off. Paths come from the zone navmesh through
    `CPathFind`, the same code mobs and trusts use; PCs have no pathfinder, so `spawn()`
-   gives the bot one. More than `kWarpDistance` away, or 3 failed path queries in
-   a row: warp to the leader. Leader in another zone: `moveToZone()` puts the bot next to
+   gives the bot one. More than `kWarpDistance` (45) away: warp to the leader. So
+   does a bot that fails 3 path queries in a row, but only from more than
+   `kWarpMinDistance` (15) and never while the party is fighting. Every warp is logged
+   (`warps to them`). Leader in another zone: `moveToZone()` puts the bot next to
    them once they have finished loading.
 3. **Wait.** The leader's entity is destroyed and rebuilt when it changes zone, so the
    party briefly has no leader; the bot stands still for up to `kLeaderGrace` (120 s).
@@ -234,7 +236,53 @@ before `follow()`:
   the gap between casts is still running (`buffWaiting`, looked at once a second). State
   `rest`. Out of combat everybody also recovers standing up, and faster sitting: see
   `OUT_OF_COMBAT_REGEN` in `settings/default/custom.lua`.
-- **Orders.** `!ja <bot> "<ability>"` and `!ws <bot> "<weapon skill>"` (`lua/bot_orders.lua`,
+- **Melee spots** (`melee()`). Bots don't stand on one another: each takes its own spot
+  around the enemy, `kMeleeSpread` (40) degrees further round than the last, to either
+  side in turn, counted from the side the leader fights from (from where the bot came
+  when the leader is not at the enemy yet), plus up to 10 degrees fixed per bot. The
+  direction is set once per enemy, so nobody shuffles when the leader moves, and the spot
+  follows the enemy. A bot walks to its spot once each time it has to walk up to the
+  enemy and then stays wherever in range that left it; a spot off the navmesh falls back
+  to anywhere in range.
+- **Status removal** (`Act::Cleanse`, `tryCleanse`, right after Heal in every rule list).
+  Any bot whose kit has one of the spells of `bots::kCleanses`, from its main job or its
+  subjob, casts it on a party member within 30 yalms who has the ailment, in this order:
+  Doom (Cursna), Petrification (Stona), Silence (Silena), Paralysis (Paralyna), Curse and
+  Bane (Cursna), Poison (Poisona), Blindness (Blindna), Disease and Plague (Viruna); then
+  Erase for anything the game flags erasable (Slow, Bind, Weight, Dia, Bio, Requiem, Elegy,
+  stat downs...). One bot per ailment: the highest heal rank that has the spell ready and
+  the member in cast range, nobody while a party member is already casting that spell on
+  them, and not again on the same member for `kCleanseRetry` (6 s). Out of cast range the
+  bot walks to the member, as for a Cure. A silenced bot can't cast, so it needs another
+  bot (or you) to Silena it. Sleep is not woken up.
+- **Bard** (`kBardRules`): Heal, Cleanse, Song, Buff, Debuff, Skillchain, Melee. It fights
+  in melee like any non-mage job, which also keeps it among the fighters its songs are
+  for. Everything except Song comes from its subjob (WHM or RDM:
+  cures, -na, Protect...), at the subjob's level. Songs are only sung on request: a party
+  song asked for with `!ma` goes on `Bot::songs`, and the Song rule (`trySong`/`pickSong`)
+  sings it again whenever a member within 30 yalms lacks it or has under `kSongRefresh`
+  (10 s) of it left. It keeps as many songs as stay on a target: two with an instrument in
+  the ranged slot, one without (`songLimit`); a third request drops the oldest. One song
+  per effect: a second Minuet tier, Etude or Carol replaces the first. Party songs reach
+  about 10 yalms around the bard, so to sing it walks up to `kSongReach` (7) of the member
+  who lacks the song and has the most others around them, then goes back to its fight. Etudes are single-target and kept up on the member
+  they were asked for. Not in towns. Songs sung at an enemy (Requiem, Lullaby, Elegy,
+  Threnody, Finale) are cast once per request. The list is in memory: empty after a
+  despawn or restart, and songs the bot can no longer sing are dropped at a job change.
+  Songs cost no MP, so `canCast` lets a bot with songs decide at 0 MP.
+- **Ninja** (`kNinjaRules`, main job only): the fighter rules plus Shadows, ahead of Provoke.
+  `tryShadows` casts Utsusemi on the bot when it has no `CopyImage` effect left: Ni if it
+  knows it, has it off recast and holds a tool, else Ichi. It waits for the last shadow to
+  go because Ichi over Ni's shadows does nothing and still uses a Shihei. In and out of a
+  fight, in a party, never in a town. Every other ninjutsu is cast on request with `!ma`.
+- **Ninjutsu costs a tool, not MP.** `spell_list.mpCost` holds the tool's item id for
+  ninjutsu (1179, Shihei, for Utsusemi), so `ready()`, `giveSpellOrder` and `carryOut` ask
+  `battleutils::HasNinjaTool` instead of comparing MP (`isNinjutsu`). The core takes the tool
+  when the spell goes off, and lets a Ninja main job use the universal tools (Shikanofuda
+  and so on) in its place. Tools have to be in the inventory. The Shadows rule runs on
+  its own gate (`tick` in `assist()`), since `canCast` wants MP.
+- **Orders.** `!ja <bot> "<ability>"`, `!ws <bot> "<weapon skill>"` and
+  `!ma <bot> "<spell or song>"` (`lua/bot_orders.lua`,
   `giveOrder`/`carryOut`) for a bot in the player's own party. The client's own `/ja` can't
   carry a bot name: it rejects the line before it reaches the server. The target is the
   player's target; an ability that can't be used on it goes on the bot itself when that is
@@ -246,6 +294,18 @@ before `follow()`:
   (engaging first for a weapon skill) and uses it. Not started within 8 s, it is dropped
   and the player is told. An ordered weapon skill that lands opens a skillchain like a
   player's, and the other bots continue it.
+  A spell (`giveSpellOrder`) is matched by its `spell_list` name, apostrophes dropped, and
+  the tier has to be named ("Valor Minuet" is the first one). Its target is the player's
+  target when the spell can be cast on it, else the player, else the bot, else what the
+  party is fighting; a party song always goes on the bard. Refused at once when the bot
+  can't cast it, is silenced, lacks the MP (the ninja tool, for ninjutsu) or has it on recast (a party song on recast is
+  still added to the songs it keeps up). A spell order lives 20 s (`kSpellOrderLife`).
+  `!ma <bot> stop` empties the bard's song list.
+- **Auto-learn (testing aid).** With `custom.BOT_AUTO_LEARN_SPELLS` on
+  (`settings/default/custom.lua`), every time the kit is rebuilt (first tick in a party,
+  level up, job change, a spell order) a bot learns every spell its main job and subjob
+  have at their levels (`learnSpells`). Only in memory: `char_spells` is not written, so
+  with the setting off a bot knows only its scroll spells again after its next spawn.
 - **Knocked out.** State `dead`. A Raise cast on the bot is accepted after 4 s. With no
   Raise, the bot gets up by itself after `kSelfRaiseDelay` (60 s) as if raised (weakened,
   normal exp loss): the homepoint warp needs a session, see the gotchas.
@@ -277,6 +337,9 @@ in use; what is in any other slot afterwards came with the trade (`handleTradedI
   over there is eaten once the bot is out in the field. A different food replaces it: the old stacks go back to the trader,
   the old effect is removed and the new food is eaten at once. About 50 food items have
   no auction house category and are not recognised.
+- *Ninja tools* (Shihei and the rest) stay in the inventory, where ninjutsu looks for them.
+  A toolbag is opened by the item scan below (`useItems`: a usable item of auction house
+  category 49), which puts its 99 tools in the inventory.
 - Anything else (potions, materials) stays in the bot's inventory.
 
 **Loot.** A bot passes on every item in its treasure pool. When the pool has exactly one
@@ -290,6 +353,7 @@ up. It equips gear that fits an empty slot (gear that was too high a level when 
 traded is not picked up this way if it was handed back) and uses one scroll the bot can learn
 (`onItemCheck` says so), through the normal item-use state, so the scroll is consumed and
 the spell is saved. Scrolls for a higher level are kept and tried again on level up.
+Toolbags are opened the same way, one per scan, when `onItemCheck` finds room for the tools.
 
 **Home** is `bot_players.home_*`: wherever the bot was last placed (`create`, `summon`,
 `!bot here`, `spawn` with a position). `spawn` without a position, and autospawn on boot,
@@ -322,8 +386,11 @@ Performance rules (bots must never cost players a slow tick):
   Park idle bots in towns.
 
 Movement speed: `CPathFind` moves `speed / 17` yalms per second, 2.9 for a PC's speed of
-50, which is slower than a player runs. Bots take `kStepsPerTick` (2) path steps per tick,
-about 5.9 yalms/s, the same as a running trust. Measured: 16.6 yalms home in 3.1 s.
+50, which is slower than a player runs. Bots take two path steps per tick, the second cut
+short (`step()`), so they move `speed / 10` yalms per second, 5.0 at speed 50: what the
+client animates another player's character at. Any faster (two full steps are 5.9 yalms/s,
+used until 2026-11-17) and the client falls behind on a long run, then jumps the bot to
+where the server has it, which looked like melee bots teleporting to a far enemy.
 
 ### Control: command queue
 
@@ -345,6 +412,7 @@ reads up to 20 `pending` rows every time server tick (2.4 s), runs them, and wri
 | `puppet` | `charid, autospawn` (1 on, 0 off). Testing aid, see below. Not saved, off after a respawn |
 | `engage` | `charid`. Testing aid: attack the nearest monster within 30 yalms (the result says where it is if further) |
 | `trade` | `charid` = bot, `anchor_charid` = puppet. Testing aid: first call requests a trade, second offers 5 gil and confirms |
+| `ma` | `charid` = bot, `anchor_charid` = the party member asking (a puppet or a player), `name` = the spell (15 characters at most). Testing aid: `!ma` without a client |
 
 `despawn` (and so `summon` and `delete`) makes the bot leave its party first.
 
@@ -357,9 +425,22 @@ and the subjob counts for half the main job. Picking the current subjob as main 
 the two. Refused while the bot is knocked out, in a fight or trading. Gear: what it wore
 on that job before comes back, the first time on a job it gets that job's starting gear
 (`bots::kStarterGear` / `kFirstJobGear`, remembered in the char var `[bot]gearedJobs`), then
-anything in its bag that fits an empty slot is put on. Spells are not given: it knows what
-it learned from scrolls. The AI starts over as the new job on the next tick (`kitDirty`).
+anything in its bag or wardrobes that fits an empty slot is put on (`charutils::SaveJobChangeGear` /
+`LoadJobChangeGear`, the player tables `char_equip_saved`). Spells are not given: it knows what
+it learned from scrolls (but see `BOT_AUTO_LEARN_SPELLS` below). The AI starts over as the new job on the next tick (`kitDirty`).
 A bot that is not spawned is spawned for the change and despawned again.
+
+**Storage.** Every bot gets the 80-slot inventory at spawn (`growInventory`, saved to
+`char_storage.inventory`) instead of a new character's 30. 80 is the most the server allows
+too, not just the client: slots are `uint8`, `char_inventory.slot` is a `tinyint` and a
+container is a fixed array of `MAX_CONTAINER_SIZE` (120). When fewer than 10 inventory slots
+are free (`kStowBelowFreeSlots`), the gear the bot isn't wearing is moved to the first of its
+eight 80-slot wardrobes with room (`stowSpareGear`, the same move and `char_inventory` update
+as the client's item move packet 0x029). Ammo stays in the inventory (`equipBestAmmo` only
+looks there). It runs at spawn and on the item check (`useItems`), which a job change flags,
+but not while a trade or Steal is being looked at or items are waiting to be handed back:
+those keep inventory slot numbers. Gear in a wardrobe is still put back on by a job change
+and by `autoEquipEmptySlots`. The dashboard's detail panel lists the wardrobes.
 
 Placement is either `anchor_charid` (an online non-bot player: the bot stands 2 yalms
 east, facing them) or `zone, pos_x, pos_y, pos_z` (server coordinates, `pos_y` is height).
@@ -451,6 +532,8 @@ In game (any character, `permission = 0`):
 !bot here <name>     move the bot next to you (that spot becomes its home)
 !ja <bot> "<job ability>"     e.g. !ja Lamaza "Benediction"
 !ws <bot> "<weapon skill>"    e.g. !ws Sigyni "Fast Blade"
+!ma <bot> "<spell or song>"   e.g. !ma Lamaza "Cure II", !ma Lyra "Valor Minuet"
+!ma <bot> stop                the bard stops keeping its songs up
 ```
 
 ## Testing the AI without a client
@@ -466,6 +549,7 @@ invite  charid <bot>, anchor_charid N           -> log: "<bot> joined Testlead's
 move    charid N, zone/pos in the same zone     -> bot walks after it (watch bot_players.pos_*)
 move    charid N, another zone                  -> bot changes zone with it
 trade   charid <bot>, anchor_charid N  (twice)  -> log: "<bot> traded with Testlead", 5 gil moved
+ma      charid <bot>, anchor_charid N, name    -> the result is what !ma would answer; log: "<bot> casts ..."
 engage  charid N                                -> puppet attacks the nearest monster; the bot joins in,
                                                    heals the puppet, both get exp
 despawn charid N                                -> bot leaves the party and goes home
@@ -476,7 +560,31 @@ Checked this way on 2026-11-15, West Ronfaure, level 1 WAR puppet + Lamaza: part
 zone after a zone change, trade, scroll learned on spawn, walking into melee range from
 26 yalms, club skill-ups, exp and a level up for both, Cure on the puppet at 24/37 HP.
 
+Checked this way on 2026-11-16, West Ronfaure, level 20 WAR puppet + Lyra (BRD 20/WHM) +
+Lamaza (WHM 20): auto-learn on joining the party (18 and 19 spells, `char_spells`
+unchanged), `ma` refusing a song above the bard's level, Army's Paeon II then Valor Minuet
+sung on request, each sung again once about 2 minutes later, `stop`, and `ma` Cure from
+Lamaza landing on the puppet.
+
+Checked this way on 2026-11-17, same place, level 1 WAR puppet + Lyra, Sigyni, Vepley and
+Victor, enemy engaged from 24 yalms: all four in state `fight` (the bard too) on four
+different spots 1.7 to 3.8 yalms apart, and no warp in the log.
+
+Checked this way on 2026-11-17, West Ronfaure, level 15 WAR puppet + a level 15 NIN with
+3 Shihei and a Toolbag (Shihei) put in `char_inventory`: auto-learn on joining (8 spells),
+Utsusemi: Ichi cast 3 s later and one Shihei gone, the toolbag opened (a stack of 99),
+no second cast while the shadows were up, `ma` Katon: Ichi refused for the missing tool and
+`ma` Utsusemi: Ichi cast. Not checked: Utsusemi: Ni (level 37), recasting after the
+shadows are hit off in a fight, and the town gate.
+
 ### Not checked in a client
+
+- Movement pace and melee spots (2026-11-17): that bots no longer jump at the end of a
+  long run to an enemy (the cause is deduced, not seen: see "Movement speed"), and how the
+  spread around an enemy looks.
+- Bard, status removal and `!ma` (2026-11-16): `!ma` typed in a client, cursor targets,
+  songs seen landing on the party and in a fight, the bard walking in to sing, Etudes, and
+  **any status removal** (nothing in the puppet test puts an ailment on a party member).
 
 - How the party window, trade window and treasure messages look.
 - Resting, the knocked-out and Raise path, and the pass-and-lot loot path: the test kills
@@ -565,8 +673,9 @@ moved from A to B`). What this can't check is how movement looks in the client.
 
 ## Next steps (ideas)
 
-1. Combat depth: bots opening skillchains and spending spare TP, more job abilities, Curaga, status removal, Raise,
-   rule lists for more jobs, spreading out around the target.
+1. Combat depth: bots opening skillchains and spending spare TP, more job abilities, Curaga, Raise,
+   waking sleeping members, bard songs chosen by the bot, Pianissimo,
+   rule lists for more jobs.
 2. Follow through Mog House exits and into instances; hand the party lead to another
    player instead of leaving when the leader logs off and other players remain.
 3. Subjobs; buying gear and choosing the better piece; gil share back to players.

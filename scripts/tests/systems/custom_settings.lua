@@ -568,11 +568,68 @@ describe('Custom guild shops always open', function()
     end)
 end)
 
+describe('Custom Tenshodo door', function()
+    ---@type CClientEntityPair
+    local player
+
+    before_each(function()
+        player = xi.test.world:spawnPlayer({ zone = xi.zone.LOWER_JEUNO })
+    end)
+
+    it('vanilla: the door to Neptune\'s Spire stays locked without the card', function()
+        xi.test.world:setSetting('custom.TENSHODO_DOOR_OPEN', false)
+        player.entities:gotoAndTrigger('_6tc')
+        assert(not player:isInEvent(), 'Expected no event: the door is locked')
+    end)
+
+    it('vanilla: the door opens with the card', function()
+        xi.test.world:setSetting('custom.TENSHODO_DOOR_OPEN', false)
+        player:addKeyItem(xi.keyItem.TENSHODO_MEMBERS_CARD)
+        player.entities:gotoAndTrigger('_6tc', { eventId = 105 })
+    end)
+
+    it('TENSHODO_DOOR_OPEN: the door opens without the card', function()
+        xi.test.world:setSetting('custom.TENSHODO_DOOR_OPEN', true)
+        player.entities:gotoAndTrigger('_6tc', { eventId = 105 })
+    end)
+end)
+
+describe('Custom chocobo rental', function()
+    ---@type CClientEntityPair
+    local player
+    local chocoboTable = xi.rentalChocobo.chocoboInfo[xi.zone.LA_THEINE_PLATEAU]
+
+    before_each(function()
+        -- No Chocobo License, and under the rental level (20)
+        player = xi.test.world:spawnPlayer({ level = 5, zone = xi.zone.LA_THEINE_PLATEAU })
+    end)
+
+    after_each(function()
+        chocoboTable.sales = 0
+    end)
+
+    it('vanilla: no chocobo without a license and under level 20', function()
+        xi.test.world:setSetting('custom.CHOCOBO_RENTAL_NO_REQUIREMENTS', false)
+        player.entities:gotoAndTrigger('Coumaine', { eventId = 121 })
+    end)
+
+    it('CHOCOBO_RENTAL_NO_REQUIREMENTS: rents at any level without a license, for the full time', function()
+        xi.test.world:setSetting('custom.CHOCOBO_RENTAL_NO_REQUIREMENTS', true)
+        player:setGil(1000)
+        player.entities:gotoAndTrigger('Coumaine', { eventId = 120, finishOption = 0 })
+        player.assert:hasEffect(xi.effect.MOUNTED)
+
+        local mounted = player:getStatusEffect(xi.effect.MOUNTED)
+        local minutes = mounted:getDuration() / 60000 -- Milliseconds
+        assert(minutes == xi.rentalChocobo.rideMinutes, string.format('Expected a %d minute ride, got %d', xi.rentalChocobo.rideMinutes, minutes))
+    end)
+end)
+
 describe('Custom spells', function()
     local caster
     local ally
 
-    local toggles = { 'ENSPELL_PARTY_TARGET', 'RDM_HASTE_LEVEL_2', 'HASTE_MP_10', 'HASTE_NO_LEVEL_PENALTY', 'ENSTONE_NO_LEVEL_PENALTY', 'HASTE_30_PERCENT' }
+    local toggles = { 'ENSPELL_PARTY_TARGET', 'RDM_HASTE_LEVEL_8', 'HASTE_MP_10', 'HASTE_NO_LEVEL_PENALTY', 'ENSTONE_NO_LEVEL_PENALTY', 'HASTE_30_PERCENT', 'HASTE_PROTECT_RECAST', 'ENSPELLS_LEVEL_2', 'ENSPELLS_NO_LEVEL_PENALTY', 'ENSPELL_PARTY_AOE' }
 
     local function set(name, enabled)
         xi.test.world:setSetting('custom.' .. name, enabled)
@@ -634,6 +691,32 @@ describe('Custom spells', function()
         assert(caster:hasStatusEffect(xi.effect.ENFIRE), 'Expected Enfire on the caster')
     end)
 
+    it('ENSPELL_PARTY_AOE: Enfire on yourself covers the party nearby, like Protectra', function()
+        set('ENSPELL_PARTY_AOE', true)
+        local protectra = GetSpell(xi.magic.spell.PROTECTRA)
+        local enfire    = GetSpell(xi.magic.spell.ENFIRE)
+        assert(enfire:getAoE() == protectra:getAoE() and enfire:getRadius() == protectra:getRadius(), 'Expected Protectra area')
+        assert(GetSpell(xi.magic.spell.ENDARK):getAoE() == protectra:getAoE(), 'Expected Endark with Protectra area too')
+
+        party()
+        cast(caster, xi.magic.spell.ENFIRE)
+        assert(caster:hasStatusEffect(xi.effect.ENFIRE), 'Expected Enfire on the caster')
+        assert(ally:hasStatusEffect(xi.effect.ENFIRE), 'Expected Enfire on the party member')
+    end)
+
+    it('ENSPELL_PARTY_AOE: not on a party member out of the area', function()
+        set('ENSPELL_PARTY_AOE', true)
+        party()
+        ally:setPos(caster:getXPos() + 30, caster:getYPos(), caster:getZPos())
+        cast(caster, xi.magic.spell.ENFIRE)
+        assert(caster:hasStatusEffect(xi.effect.ENFIRE), 'Expected Enfire on the caster')
+        assert(not ally:hasStatusEffect(xi.effect.ENFIRE), 'Expected no Enfire on the far party member')
+
+        set('ENSPELL_PARTY_AOE', false)
+        assert(GetSpell(xi.magic.spell.ENFIRE):getAoE() ~= GetSpell(xi.magic.spell.PROTECTRA):getAoE() or
+            GetSpell(xi.magic.spell.ENFIRE):getRadius() == 0, 'Expected Enfire back to one target')
+    end)
+
     it('ENSPELL_PARTY_TARGET: not on a party member out of range', function()
         set('ENSPELL_PARTY_TARGET', true)
         party()
@@ -643,17 +726,79 @@ describe('Custom spells', function()
         assert(not ally:hasStatusEffect(xi.effect.ENFIRE), 'Expected no Enfire on the far party member')
     end)
 
-    it('vanilla: a level 1 Red Mage cannot learn Enstone, nor a level 2 one Haste', function()
-        assert(rdm(1):canLearnSpell(xi.magic.spell.ENSTONE) ~= 0, 'Expected Enstone to need a higher level')
-        assert(rdm(2):canLearnSpell(xi.magic.spell.HASTE) ~= 0, 'Expected Haste to need a higher level')
+    it('vanilla: a level 2 Red Mage cannot learn Enstone, nor a level 8 one Haste', function()
+        assert(rdm(2):canLearnSpell(xi.magic.spell.ENSTONE) ~= 0, 'Expected Enstone to need a higher level')
+        assert(rdm(8):canLearnSpell(xi.magic.spell.HASTE) ~= 0, 'Expected Haste to need a higher level')
+        assert(GetSpell(xi.magic.spell.HASTE):getRecastTime() == 20000, 'Expected Haste recast 20 s')
         assert(GetSpell(xi.magic.spell.ENSTONE):getJobLevel(xi.job.RDM) == 18, 'Expected Enstone at RDM 18')
         assert(GetSpell(xi.magic.spell.HASTE):getJobLevel(xi.job.RDM) == 48, 'Expected Haste at RDM 48')
     end)
 
-    it('RDM_HASTE_LEVEL_2: a level 2 Red Mage learns Haste; White Mage is unchanged', function()
-        set('RDM_HASTE_LEVEL_2', true)
-        assert(rdm(2):canLearnSpell(xi.magic.spell.HASTE) == 0, 'Expected Haste to be learnable at 2')
+    it('RDM_HASTE_LEVEL_8: a level 8 Red Mage learns Haste, a level 7 one not; White Mage is unchanged', function()
+        set('RDM_HASTE_LEVEL_8', true)
+        assert(rdm(8):canLearnSpell(xi.magic.spell.HASTE) == 0, 'Expected Haste to be learnable at 8')
+        assert(rdm(7):canLearnSpell(xi.magic.spell.HASTE) ~= 0, 'Expected Haste not learnable at 7')
         assert(GetSpell(xi.magic.spell.HASTE):getJobLevel(xi.job.WHM) == 40, 'Expected Haste still at WHM 40')
+    end)
+
+    it('HASTE_PROTECT_RECAST: Haste recasts like Protect', function()
+        set('HASTE_PROTECT_RECAST', true)
+        local protect = GetSpell(xi.magic.spell.PROTECT):getRecastTime()
+        assert(protect == 5000, string.format('Expected Protect recast 5000, got %d', protect))
+        assert(GetSpell(xi.magic.spell.HASTE):getRecastTime() == protect, 'Expected Haste at Protect recast')
+
+        party()
+        cast(ally, xi.magic.spell.HASTE)
+        assert(ally:hasStatusEffect(xi.effect.HASTE), 'Expected Haste on the party member')
+
+        set('HASTE_PROTECT_RECAST', false)
+        assert(GetSpell(xi.magic.spell.HASTE):getRecastTime() == 20000, 'Expected Haste back at 20 s')
+    end)
+
+    it('ENSPELLS_LEVEL_2: every en-spell learnable at 2 by its job', function()
+        local enspells =
+        {
+            [xi.job.RDM] = { xi.magic.spell.ENFIRE, xi.magic.spell.ENBLIZZARD, xi.magic.spell.ENAERO, xi.magic.spell.ENSTONE,
+                xi.magic.spell.ENTHUNDER, xi.magic.spell.ENWATER, xi.magic.spell.ENFIRE_II, xi.magic.spell.ENBLIZZARD_II,
+                xi.magic.spell.ENAERO_II, xi.magic.spell.ENSTONE_II, xi.magic.spell.ENTHUNDER_II, xi.magic.spell.ENWATER_II },
+            [xi.job.PLD] = { xi.magic.spell.ENLIGHT },
+            [xi.job.DRK] = { xi.magic.spell.ENDARK },
+        }
+
+        local function player(job)
+            return xi.test.world:spawnPlayer({ zone = xi.zone.IFRITS_CAULDRON, job = job, level = 2 })
+        end
+
+        assert(player(xi.job.RDM):canLearnSpell(xi.magic.spell.ENFIRE) ~= 0, 'Expected vanilla Enfire above 2')
+
+        set('ENSPELLS_LEVEL_2', true)
+        for job, list in pairs(enspells) do
+            local p = player(job)
+            for _, spellId in ipairs(list) do
+                assert(GetSpell(spellId):getJobLevel(job) == 2, string.format('Expected spell %d at level 2 for job %d', spellId, job))
+                assert(p:canLearnSpell(spellId) == 0, string.format('Expected spell %d learnable at 2 for job %d', spellId, job))
+            end
+        end
+
+        assert(GetSpell(xi.magic.spell.ENFIRE):getJobLevel(xi.job.PLD) == 255, 'Expected PLD still without Enfire')
+
+        set('ENSPELLS_LEVEL_2', false)
+        assert(GetSpell(xi.magic.spell.ENFIRE):getJobLevel(xi.job.RDM) == 24, 'Expected Enfire back at 24')
+        assert(GetSpell(xi.magic.spell.ENLIGHT):getJobLevel(xi.job.PLD) == 85, 'Expected Enlight back at 85')
+    end)
+
+    it('ENSPELLS_NO_LEVEL_PENALTY: Enfire II full duration on a level 10 party member', function()
+        set('ENSPELL_PARTY_TARGET', true)
+        party(10)
+        cast(ally, xi.magic.spell.ENFIRE_II)
+        local short = ally:getStatusEffect(xi.effect.ENFIRE_II):getDuration()
+
+        set('ENSPELLS_NO_LEVEL_PENALTY', true)
+        party(10)
+        cast(ally, xi.magic.spell.ENFIRE_II)
+        local full = ally:getStatusEffect(xi.effect.ENFIRE_II):getDuration()
+
+        assert(full >= short * 5.5, string.format('Expected about 5.8x the duration, got %s vs %s', full, short))
     end)
 
     it('HASTE_MP_10: Haste costs 10 MP', function()
@@ -706,6 +851,224 @@ describe('Custom spells', function()
         local power = ally:getStatusEffect(xi.effect.HASTE):getPower()
         assert(power == 2998, string.format('Expected Haste at 2998, got %s', power))
         assert(ally:getMod(xi.mod.HASTE_MAGIC) == 2998, string.format('Expected 2998 magic haste, got %s', ally:getMod(xi.mod.HASTE_MAGIC)))
+    end)
+end)
+
+describe('Custom en-spell element on strikes', function()
+    local player
+    local mob
+
+    before_each(function()
+        player = xi.test.world:spawnPlayer({ zone = xi.zone.IFRITS_CAULDRON, job = xi.job.RDM, level = 75 })
+        mob    = player.entities:get('Volcanic_Bomb')
+        mob:respawn()
+        player:setWeather(xi.weather.NONE)
+        stub('VanadielDayElement', xi.element.NONE)
+    end)
+
+    local function multiplier(effect)
+        if effect ~= nil then
+            player:addStatusEffect(effect, { power = 10, duration = 180, origin = player })
+        end
+
+        return xi.custom.enspellStrikeMultiplier(player, mob)
+    end
+
+    it('vanilla: no multiplier with an en-spell', function()
+        assert(multiplier(xi.effect.ENFIRE) == 1, 'Expected x1 with the toggle off')
+    end)
+
+    it('ENSPELL_ELEMENT_STRIKES: the Bomb takes x1.3 from Enfire, x0.5 from Enblizzard', function()
+        xi.test.world:setSetting('custom.ENSPELL_ELEMENT_STRIKES', true)
+        xi.test.world:setSetting('custom.RESIST_RANK_DAMAGE_RATE', true)
+        assert(multiplier(nil) == 1, 'Expected x1 without an en-spell')
+
+        local fire = multiplier(xi.effect.ENFIRE)
+        assert(math.abs(fire - 1.3) < 0.001, string.format('Expected x1.3 for fire (rank -3), got %s', fire))
+
+        player:delStatusEffect(xi.effect.ENFIRE)
+        local ice = multiplier(xi.effect.ENBLIZZARD_II)
+        assert(math.abs(ice - 0.5) < 0.001, string.format('Expected x0.5 for ice (rank 4), got %s', ice))
+    end)
+
+    it('ENSPELL_ELEMENT_STRIKES: day and weather count', function()
+        xi.test.world:setSetting('custom.ENSPELL_ELEMENT_STRIKES', true)
+        xi.test.world:setSetting('custom.DAY_WEATHER_ALWAYS', true)
+        player:setWeather(xi.weather.HOT_SPELL)
+        local fire = multiplier(xi.effect.ENFIRE)
+        -- Bomb fire rank -3 is x1 in vanilla rank rates; Hot Spell +10%
+        assert(math.abs(fire - 1.1) < 0.001, string.format('Expected x1.1 under a hot spell, got %s', fire))
+    end)
+
+    it('ENSPELL_ELEMENT_STRIKES: melee and ranged hits use it, weapon skills do not', function()
+        xi.test.world:setSetting('custom.ENSPELL_ELEMENT_STRIKES', true)
+        stub('xi.custom.enspellStrikeMultiplier', 0)
+
+        local melee = xi.combat.physical.calculateMeleePDIF(player, mob, xi.skill.SWORD, 1, false, true, false, 0, false, xi.slot.MAIN, false)
+        local ws    = xi.combat.physical.calculateMeleePDIF(player, mob, xi.skill.SWORD, 1, false, true, false, 0, true, xi.slot.MAIN, false)
+        local range = xi.combat.physical.calculateRangedPDIF(player, mob, xi.skill.ARCHERY, 1, false, true, false, 0, false, 0)
+        assert(melee == 0, string.format('Expected melee pDIF x0, got %s', melee))
+        assert(range == 0, string.format('Expected ranged pDIF x0, got %s', range))
+        assert(ws > 0, 'Expected the weapon skill pDIF untouched')
+    end)
+end)
+
+describe('Custom tier I nukes', function()
+    local nukes =
+    {
+        [xi.magic.spell.WATER]    = 5,
+        [xi.magic.spell.AERO]     = 9,
+        [xi.magic.spell.FIRE]     = 13,
+        [xi.magic.spell.BLIZZARD] = 17,
+        [xi.magic.spell.THUNDER]  = 21,
+    }
+
+    local function set(name, enabled)
+        xi.test.world:setSetting('custom.' .. name, enabled)
+        xi.custom.spells.apply()
+    end
+
+    -- Just what tier1Scaled reads from a caster
+    local function fakeCaster(mainJob, mainLevel, subLevel)
+        return
+        {
+            getMainJob = function()
+                return mainJob
+            end,
+
+            getMainLvl = function()
+                return mainLevel
+            end,
+
+            getSubLvl = function()
+                return subLevel or 0
+            end,
+        }
+    end
+
+    local function scaled(level, spellId)
+        return xi.custom.spells.tier1Scaled(fakeCaster(xi.job.BLM, level), spellId or xi.magic.spell.THUNDER)
+    end
+
+    local function blm(level)
+        local player = xi.test.world:spawnPlayer({ zone = xi.zone.IFRITS_CAULDRON, job = xi.job.BLM, level = level })
+        local mob    = player.entities:get('Volcanic_Bomb')
+        mob:respawn()
+        player:setPos(mob:getXPos() + 3, mob:getYPos(), mob:getZPos())
+        player:setWeather(xi.weather.NONE)
+        stub('VanadielDayElement', xi.element.NONE)
+        return player, mob
+    end
+
+    after_each(function()
+        xi.test.world:setSetting('custom.BLM_TIER1_NUKES_LEVEL_1', false)
+        xi.test.world:setSetting('custom.TIER1_NUKE_LEVEL_SCALING', false)
+        xi.test.world:setSetting('custom.TIER1_NUKE_POWER_CAP', 0)
+        xi.custom.spells.apply()
+    end)
+
+    it('vanilla: retail BLM levels and MP', function()
+        for spellId, level in pairs(nukes) do
+            assert(GetSpell(spellId):getJobLevel(xi.job.BLM) == level, string.format('Expected spell %d at BLM %d', spellId, level))
+        end
+
+        assert(GetSpell(xi.magic.spell.THUNDER):getMPCost() == 9, 'Expected Thunder at 9 MP')
+        local player = xi.test.world:spawnPlayer({ zone = xi.zone.IFRITS_CAULDRON, job = xi.job.BLM, level = 1 })
+        assert(player:canLearnSpell(xi.magic.spell.THUNDER) ~= 0, 'Expected Thunder to need a higher level')
+    end)
+
+    it('BLM_TIER1_NUKES_LEVEL_1: a level 1 Black Mage learns all five; RDM and Stone unchanged', function()
+        set('BLM_TIER1_NUKES_LEVEL_1', true)
+        local player = xi.test.world:spawnPlayer({ zone = xi.zone.IFRITS_CAULDRON, job = xi.job.BLM, level = 1 })
+        for spellId in pairs(nukes) do
+            assert(GetSpell(spellId):getJobLevel(xi.job.BLM) == 1, string.format('Expected spell %d at BLM 1', spellId))
+            assert(player:canLearnSpell(spellId) == 0, string.format('Expected spell %d learnable at 1', spellId))
+        end
+
+        assert(GetSpell(xi.magic.spell.THUNDER):getJobLevel(xi.job.RDM) == 29, 'Expected Thunder still at RDM 29')
+        assert(GetSpell(xi.magic.spell.STONE):getJobLevel(xi.job.BLM) == 1, 'Expected Stone still at BLM 1')
+
+        set('BLM_TIER1_NUKES_LEVEL_1', false)
+        assert(GetSpell(xi.magic.spell.THUNDER):getJobLevel(xi.job.BLM) == 21, 'Expected Thunder back at BLM 21')
+    end)
+
+    it('scaling: Thunder goes from Stone at 1 to retail Thunder at 21', function()
+        set('BLM_TIER1_NUKES_LEVEL_1', true) -- else a BLM below 21 can't cast it: no level to scale by
+        -- Power cap 65: Thunder goes 10 -> 65 over levels 1-21; MP and cast time always Thunder's
+        xi.test.world:setSetting('custom.TIER1_NUKE_POWER_CAP', 65)
+        local function check(level, v, m0)
+            local s = scaled(level)
+            assert(s.v == v and math.abs(s.m0 - m0) < 0.001 and s.m50 == 1 and s.mp == 9 and s.castTime == 500,
+                string.format('Level %d: expected V%d M0 %.2f MP9, got V%d M0 %.2f M50 %.2f MP%d cast %d', level, v, m0, s.v, s.m0, s.m50, s.mp, s.castTime))
+        end
+
+        check(1, 10, 2.0)
+        check(6, 24, 1.75)  -- 23.75
+        check(11, 38, 1.5)  -- 37.5
+        check(21, 65, 1.0)
+        check(40, 65, 1.0) -- capped
+
+        -- Every one of the five is the same as Thunder at every level
+        for spellId in pairs(nukes) do
+            for _, level in ipairs({ 1, 6, 11, 21, 40 }) do
+                local s, t = scaled(level, spellId), scaled(level)
+                assert(s.v == t.v and s.m0 == t.m0 and s.m50 == t.m50 and s.mp == t.mp,
+                    string.format('Spell %d at %d: V%d, Thunder V%d', spellId, level, s.v, t.v))
+            end
+        end
+
+        assert(scaled(21, xi.magic.spell.WATER).v == 65, 'Expected Water at 65 at level 21')
+
+        xi.test.world:setSetting('custom.TIER1_NUKE_POWER_CAP', 0)
+        assert(scaled(21).v == 85, 'Expected retail 85 with no cap')
+        assert(xi.custom.spells.tier1Scaled(fakeCaster(xi.job.BLM, 1), xi.magic.spell.STONE) == nil, 'Expected Stone not scaled')
+    end)
+
+    it('scaling: a WAR/BLM uses the BLM sub level', function()
+        set('BLM_TIER1_NUKES_LEVEL_1', true)
+        xi.test.world:setSetting('custom.TIER1_NUKE_POWER_CAP', 65)
+        local s = xi.custom.spells.tier1Scaled(fakeCaster(xi.job.WAR, 30, 11), xi.magic.spell.THUNDER)
+        assert(s.v == 38, string.format('Expected V38 at sub level 11, got %d', s.v))
+    end)
+
+    it('TIER1_NUKE_LEVEL_SCALING: a level 1 Black Mage pays Thunder\'s 9 MP for Thunder and Water', function()
+        set('BLM_TIER1_NUKES_LEVEL_1', true)
+        set('TIER1_NUKE_LEVEL_SCALING', true)
+        for spellId in pairs(nukes) do
+            assert(GetSpell(spellId):getMPCost() == 9 and GetSpell(spellId):getCastTime() == 500,
+                string.format('Expected spell %d at 9 MP, 0.5 s', spellId))
+        end
+
+        for _, spellId in ipairs({ xi.magic.spell.THUNDER, xi.magic.spell.WATER }) do
+            local player, mob = blm(1) -- a new one each time: the Bomb fights back
+            player:addSpell(spellId)
+            player:setMP(15)
+            player.actions:useSpell(mob, spellId)
+            xi.test.world:skipTime(10)
+            assert(player:getMP() == 6, string.format('Spell %d: expected 9 MP spent, have %d left', spellId, player:getMP()))
+        end
+
+        set('TIER1_NUKE_LEVEL_SCALING', false)
+        assert(GetSpell(xi.magic.spell.WATER):getMPCost() == 5, 'Expected Water back at 5 MP')
+    end)
+
+    it('TIER1_NUKE_LEVEL_SCALING: a level 1 Thunder has Stone base damage; mobs keep retail', function()
+        local player, mob = blm(1)
+        local function base(caster, target, spellId)
+            return xi.spells.damage.calculateBaseDamage(caster, target, spellId, xi.magic.spellGroup.BLACK, xi.skill.ELEMENTAL_MAGIC, xi.mod.INT)
+        end
+
+        local stone = base(player, mob, xi.magic.spell.STONE)
+        local retail = base(player, mob, xi.magic.spell.THUNDER)
+        local mobRetail = base(mob, player, xi.magic.spell.THUNDER)
+
+        set('TIER1_NUKE_LEVEL_SCALING', true)
+        local thunder = base(player, mob, xi.magic.spell.THUNDER)
+        assert(thunder == stone, string.format('Expected Stone damage %d, got %d', stone, thunder))
+        assert(stone > 0, 'Expected Stone to do some base damage')
+        assert(thunder < retail, string.format('Expected less than retail %d, got %d', retail, thunder))
+        assert(base(mob, player, xi.magic.spell.THUNDER) == mobRetail, 'Expected mob Thunder unchanged')
+        assert(xi.spells.damage.pTable[xi.magic.spell.THUNDER][6] == 85, 'Expected the shared pTable row restored')
     end)
 end)
 
@@ -822,8 +1185,8 @@ describe('Custom !resist command', function()
         xi.test.world:setSetting('custom.RESIST_RANK_DAMAGE_RATE', true)
         sendChat(string.format('!resist %d', mob:getID()))
         local lines = resistLines()
-        -- Bomb: fire rank -3 -> x1.5, the rest rank 4 -> x0.5
-        assert(lines[6] and string.find(lines[6], 'M dw=0 fire=150 ice=50 ', 1, true), 'Bad multiplier line: ' .. tostring(lines[6]))
+        -- Bomb: fire rank -3 -> x1.3, the rest rank 4 -> x0.5
+        assert(lines[6] and string.find(lines[6], 'M dw=0 fire=130 ice=50 ', 1, true), 'Bad multiplier line: ' .. tostring(lines[6]))
     end)
 
     it('RESIST_COMMAND: prints the melee hit chance', function()
@@ -933,7 +1296,7 @@ describe('Custom resistance rank damage rates', function()
         xi.test.world:setSetting('custom.RESIST_RANK_DAMAGE_RATE', true)
         local expected =
         {
-            [-3] = 1.5, [-2] = 1.25, [-1] = 1, [0] = 1, [1] = 1, [2] = 0.75, [3] = 0.5, [4] = 0.5,
+            [-3] = 1.3, [-2] = 1.15, [-1] = 1, [0] = 1, [1] = 1, [2] = 0.75, [3] = 0.5, [4] = 0.5,
             [5] = 0.5, [6] = 0.25, [7] = 0.25, [8] = 0.25, [9] = 0.25, [10] = 0.25, [11] = 0.25,
         }
         for rank = -3, 11 do
@@ -946,7 +1309,7 @@ describe('Custom resistance rank damage rates', function()
         xi.test.world:setSetting('custom.RESIST_RANK_DAMAGE_RATE', true)
         player:addStatusEffect(xi.effect.SUBTLE_SORCERY, { power = 1, duration = 60, origin = player })
         assert(rate(6) == 1, 'Expected x1 at rank 6 with Subtle Sorcery')
-        assert(rate(-3) == 1.5, 'Expected x1.5 at rank -3 with Subtle Sorcery')
+        assert(rate(-3) == 1.3, 'Expected x1.3 at rank -3 with Subtle Sorcery')
     end)
 
     describe('rank 11 nukes', function()
@@ -974,5 +1337,27 @@ describe('Custom resistance rank damage rates', function()
             local r = xi.combat.magicHitRate.calculateResistRate(player, mob, { magicalElement = xi.element.FIRE, effectId = xi.effect.BURN })
             assert(r == 0, 'Expected immunity, got ' .. tostring(r))
         end)
+    end)
+end)
+
+describe('Custom weapon skill accuracy multiplier', function()
+    local player
+
+    before_each(function()
+        player = xi.test.world:spawnPlayer({ zone = xi.zone.IFRITS_CAULDRON, level = 75 })
+        player:setSkillLevel(xi.skill.HAND_TO_HAND, 1000) -- 100 skill
+    end)
+
+    it('vanilla: skill counts once', function()
+        local acc = player:getACC()
+        xi.test.world:setSetting('custom.WEAPON_SKILL_ACCURACY_MULTIPLIER', 1.0)
+        assert(player:getACC() == acc, 'Expected no change at 1.0')
+    end)
+
+    it('WEAPON_SKILL_ACCURACY_MULTIPLIER: x1.5 adds half the skill as accuracy', function()
+        local before = player:getACC()
+        xi.test.world:setSetting('custom.WEAPON_SKILL_ACCURACY_MULTIPLIER', 1.5)
+        local after = player:getACC()
+        assert(after - before == 50, string.format('Expected +50 accuracy from 100 skill, got %d -> %d', before, after))
     end)
 end)

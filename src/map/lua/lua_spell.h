@@ -63,6 +63,7 @@ public:
     void setAnimation(uint16 animationID);
     void setCastTime(uint32 casttime);
     void setMPCost(uint16 mpcost);
+    void setRecastTime(uint32 recastTime);
     auto canTargetEnemy() -> bool;
     auto getAoE() const -> uint8;
     auto isAoE() const -> bool;
@@ -83,6 +84,7 @@ public:
     auto getFlag() -> uint8;
     auto getLevel(xi::Job jobId) -> uint8;
     auto getCastTime() -> uint32;
+    auto getRecastTime() -> uint32;
     auto getPrimaryTargetID() -> uint32;
     auto getKnockback() const -> Knockback;
     auto isCritical() const -> bool;

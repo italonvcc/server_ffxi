@@ -39,8 +39,8 @@ JOBS = [
     "SAM", "NIN", "DRG", "SMN", "BLU", "COR", "PUP", "DNC", "SCH", "GEO", "RUN", "MON",
 ]
 # Jobs a bot can be created as (the map server checks this too): the six starting jobs,
-# and RNG, SAM, NIN, which the bot module gives starting gear
-START_JOBS = (1, 2, 3, 4, 5, 6, 11, 12, 13)
+# and BRD, RNG, SAM, NIN, which the bot module gives starting gear
+START_JOBS = (1, 2, 3, 4, 5, 6, 10, 11, 12, 13)
 RACES = {1: "Hume (M)", 2: "Hume (F)", 3: "Elvaan (M)", 4: "Elvaan (F)",
          5: "Tarutaru (M)", 6: "Tarutaru (F)", 7: "Mithra", 8: "Galka"}
 SIZES = {0: "Small", 1: "Medium", 2: "Large"}
@@ -62,6 +62,8 @@ SKILLS = {
     55: "Alchemy", 56: "Cooking", 57: "Synergy",
 }
 LOC_INVENTORY = 0
+# LOC_WARDROBE .. LOC_WARDROBE8 (bots keep spare gear there, see stowSpareGear)
+LOC_WARDROBES = (8, 10, 11, 12, 13, 14, 15, 16)
 
 # char_jobs column per job id
 JOB_COLUMNS = {i: name.lower() for i, name in enumerate(JOBS) if i > 0}
@@ -236,7 +238,7 @@ def get_bot(conn, charid):
                   for i, col in JOB_COLUMNS.items() if jobs_row.get(col, 0)]
 
     equipment = {r["equipslotid"]: r for r in query(conn, """
-        SELECT e.equipslotid, i.itemId, ib.name
+        SELECT e.equipslotid, e.containerid, e.slotid, i.itemId, ib.name
         FROM char_equip e
         JOIN char_inventory i ON i.charid = e.charid AND i.location = e.containerid AND i.slot = e.slotid
         LEFT JOIN item_basic ib ON ib.itemid = i.itemId
@@ -251,10 +253,18 @@ def get_bot(conn, charid):
         ORDER BY i.slot
     """, (charid, LOC_INVENTORY, GIL_ITEM_ID))
 
+    wardrobe = query(conn, f"""
+        SELECT i.location, i.slot, i.itemId, i.quantity, ib.name
+        FROM char_inventory i
+        LEFT JOIN item_basic ib ON ib.itemid = i.itemId
+        WHERE i.charid = ? AND i.location IN ({", ".join("?" * len(LOC_WARDROBES))})
+        ORDER BY i.location, i.slot
+    """, (charid, *LOC_WARDROBES))
+
     gil = query(conn, "SELECT quantity FROM char_inventory WHERE charid = ? AND itemId = ? LIMIT 1",
                 (charid, GIL_ITEM_ID))
 
-    equipped_slots = {(LOC_INVENTORY, r["itemId"]) for r in equipment.values()}
+    equipped_slots = {(r["containerid"], r["slotid"]) for r in equipment.values()}
 
     skills = query(conn, "SELECT skillid, value FROM char_skills WHERE charid = ? AND value > 0 ORDER BY skillid",
                    (charid,))
@@ -307,7 +317,10 @@ def get_bot(conn, charid):
                       for i, name in enumerate(EQUIP_SLOTS)],
         "inventory": [{"slot": r["slot"], "item": pretty_item(r["name"]) or f"Item {r['itemId']}",
                        "item_id": r["itemId"], "quantity": r["quantity"],
-                       "equipped": (LOC_INVENTORY, r["itemId"]) in equipped_slots} for r in inventory],
+                       "equipped": (LOC_INVENTORY, r["slot"]) in equipped_slots} for r in inventory],
+        "wardrobe": [{"wardrobe": LOC_WARDROBES.index(r["location"]) + 1, "slot": r["slot"],
+                      "item": pretty_item(r["name"]) or f"Item {r['itemId']}", "item_id": r["itemId"],
+                      "equipped": (r["location"], r["slot"]) in equipped_slots} for r in wardrobe],
     }
 
 
@@ -369,7 +382,7 @@ def queue_command(conn, body):
                    autospawn=1 if body.get("autospawn", True) else 0)
         row["job"] = as_int("job", 1, 13, True)
         if row["job"] not in START_JOBS:
-            raise BadRequest("Bots can start as WAR, MNK, WHM, BLM, RDM, THF, RNG, SAM or NIN.")
+            raise BadRequest("Bots can start as WAR, MNK, WHM, BLM, RDM, THF, BRD, RNG, SAM or NIN.")
     else:
         row["charid"] = as_int("charid", 1, 2**32 - 1, True)
         if not query(conn, "SELECT charid FROM bot_players WHERE charid = ?", (row["charid"],)):
@@ -384,9 +397,9 @@ def queue_command(conn, body):
             if job is None and subjob is None:
                 raise BadRequest("Pick a job or a subjob.")
             if job is not None and job not in START_JOBS:
-                raise BadRequest("Bot jobs are WAR, MNK, WHM, BLM, RDM, THF, RNG, SAM and NIN.")
+                raise BadRequest("Bot jobs are WAR, MNK, WHM, BLM, RDM, THF, BRD, RNG, SAM and NIN.")
             if subjob not in (None, 0) and subjob not in START_JOBS:
-                raise BadRequest("Bot jobs are WAR, MNK, WHM, BLM, RDM, THF, RNG, SAM and NIN.")
+                raise BadRequest("Bot jobs are WAR, MNK, WHM, BLM, RDM, THF, BRD, RNG, SAM and NIN.")
             if job is not None and job == subjob:
                 raise BadRequest("The main job and the subjob can't be the same.")
             if job is not None:

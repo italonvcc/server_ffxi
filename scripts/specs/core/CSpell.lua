@@ -65,6 +65,15 @@ end
 function CSpell:setMPCost(mpcost)
 end
 
+---@param recastTime integer
+---@return nil
+function CSpell:setRecastTime(recastTime)
+end
+
+---@return integer
+function CSpell:getRecastTime()
+end
+
 ---@nodiscard
 ---@return boolean
 function CSpell:canTargetEnemy()

@@ -130,13 +130,23 @@ xi.settings.custom =
 
     -- Elemental damage rate by the target's resistance rank (the table is in
     -- scripts/globals/spells/damage_spell.lua):
-    --   rank -3: x1.5   -2: x1.25   -1..1: x1   2: x0.75   3..5: x0.5   6..11: x0.25
+    --   rank -3: x1.3   -2: x1.15   -1..1: x1   2: x0.75   3..5: x0.5   6..11: x0.25
     -- Weak elements now do extra damage. Rank 11 nukes roll resists like rank 10 instead of an
     -- automatic 1/4 (status effects stay immune). Magic evasion from the rank is unchanged.
     -- Used by nukes, blue magic, Drain/Aspir, Quick Draw, additional effects and spikes.
     -- Subtle Sorcery ignores the reductions, not the bonuses.
     -- false = vanilla (x0.5 at rank 4+, nukes at rank 11 always 1/4).
     RESIST_RANK_DAMAGE_RATE = true,
+
+    -- --------------------------------
+    -- Accuracy
+    -- --------------------------------
+
+    -- Characters' accuracy from their combat skill (the weapon's skill for melee, archery,
+    -- marksmanship or throwing for ranged) is multiplied by this. Raises hit rates without
+    -- favouring a stat: a level 20 with 63 skill gets +31 accuracy at 1.5. Players and bots;
+    -- mobs, trusts, pets and automatons are unchanged. 1.0 = vanilla.
+    WEAPON_SKILL_ACCURACY_MULTIPLIER = 1.5,
 
     -- --------------------------------
     -- Shops
@@ -151,6 +161,21 @@ xi.settings.custom =
     -- holiday. false = vanilla (open only during their hours, e.g. 8:00-23:00, closed on
     -- their holiday when main.GUILD_SHOP_HOLIDAYS is on).
     GUILD_SHOPS_ALWAYS_OPEN = true,
+
+    -- --------------------------------
+    -- Access
+    -- --------------------------------
+
+    -- The door to the Tenshodo headquarters in Neptune's Spire (Lower Jeuno) opens for
+    -- everyone. The Tenshodo shops inside still ask for the card.
+    -- false = vanilla (Tenshodo Member's Card required).
+    TENSHODO_DOOR_OPEN = true,
+
+    -- Chocobo renters ask for neither a Chocobo License nor a level, and the ride lasts
+    -- the full 30 minutes at any level. The Chocobo Ticket works the same way. Stables in
+    -- the past still need the Wings of the Goddess mission.
+    -- false = vanilla (license; level 20, or 15 in the starter cities for a 15 minute ride).
+    CHOCOBO_RENTAL_NO_REQUIREMENTS = true,
 
     -- --------------------------------
     -- Inventory
@@ -205,10 +230,20 @@ xi.settings.custom =
 
     -- En-spells (Enfire to Enwater, their II tiers, Enlight) can be cast on a party member
     -- within 20 yalms, like Phalanx II. Client patch. false = vanilla (self only).
-    ENSPELL_PARTY_TARGET = true,
+    ENSPELL_PARTY_TARGET = false,
 
-    -- Red Mage learns Haste at level 2. Client patch. false = vanilla (level 48).
-    RDM_HASTE_LEVEL_2 = true,
+    -- Every en-spell (Enfire to Enwater, their II tiers, Enlight, Endark) is cast on
+    -- yourself and covers every party member within 10 yalms, like Protectra. Replaces
+    -- ENSPELL_PARTY_TARGET while on. Client patch (target cursor: self).
+    -- false = vanilla (one target).
+    ENSPELL_PARTY_AOE = false,
+
+    -- Red Mage learns Haste at level 8. Client patch. false = vanilla (level 48).
+    RDM_HASTE_LEVEL_8 = true,
+
+    -- Haste recasts in 5 seconds, like Protect. Client patch (recast shown).
+    -- false = vanilla (20 seconds).
+    HASTE_PROTECT_RECAST = false,
 
     -- Haste costs 10 MP. Client patch. false = vanilla (40 MP).
     HASTE_MP_10 = true,
@@ -224,4 +259,47 @@ xi.settings.custom =
     -- Enstone lasts its full time on targets below level 18 (a party member under 18 gets
     -- all 3 minutes). Server only. false = vanilla (cut to target level / 18 of it).
     ENSTONE_NO_LEVEL_PENALTY = true,
+
+    -- Every en-spell is learnable and castable at level 2 by the jobs that have it: Red Mage
+    -- Enfire to Enwater and their II tiers, Paladin Enlight, Dark Knight Endark.
+    -- Client patch. false = vanilla (RDM 16-27 and 50-60, PLD and DRK 85).
+    ENSPELLS_LEVEL_2 = true,
+
+    -- Every Red Mage en-spell (Enfire to Enwater and the II tiers) lasts its full time on
+    -- targets below its level, like ENSTONE_NO_LEVEL_PENALTY. Server only.
+    -- false = vanilla (cut to target level / spell level of it).
+    ENSPELLS_NO_LEVEL_PENALTY = true,
+
+    -- modules/custom/lua/enspell_element_strikes.lua. While a player or bot has an en-spell
+    -- on, their melee swings (auto-attacks, kicks, counters) and ranged attacks take that
+    -- element's bonuses and penalties against the target, as a nuke would: its elemental
+    -- damage taken (SDT), resistance rank damage rate and day/weather. Weapon skills, absorb
+    -- and null are left out. false = vanilla.
+    ENSPELL_ELEMENT_STRIKES = true,
+
+    -- Black Mage learns and casts Water, Aero, Fire, Blizzard and Thunder at level 1.
+    -- Client patch. false = vanilla (levels 5, 9, 13, 17, 21).
+    BLM_TIER1_NUKES_LEVEL_1 = true,
+
+    -- Water, Aero, Fire, Blizzard and Thunder cast by a player (or bot) are equally strong,
+    -- scaling with the caster's level in the job casting them: Stone's power at level 1 (10)
+    -- rising evenly to TIER1_NUKE_POWER_CAP at level 21 (Thunder's retail level) and no
+    -- further; the INT bonus goes from Stone's to Thunder's the same way. They always cost and
+    -- cast like Thunder (9 MP, 0.5 s). Mobs, trusts and pets are unchanged. Client patch (MP
+    -- shown and checked). false = vanilla.
+    TIER1_NUKE_LEVEL_SCALING = true,
+
+    -- Power (V) all five of those spells reach at level 21 with TIER1_NUKE_LEVEL_SCALING; the
+    -- levels below scale with it. 0 = Thunder's retail 85.
+    TIER1_NUKE_POWER_CAP = 65,
+
+    -- --------------------------------
+    -- Bots
+    -- --------------------------------
+
+    -- Testing aid (modules/bots): a bot knows every spell and song its job and subjob have
+    -- at its level, without scrolls. Nothing is saved: turned off, a bot is back to the
+    -- spells it learned from scrolls at its next spawn.
+    -- false = vanilla (bots learn spells from the scrolls they are given).
+    BOT_AUTO_LEARN_SPELLS = true,
 }

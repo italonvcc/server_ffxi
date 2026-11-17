@@ -500,8 +500,8 @@ end
 -- of the retail x0.5 at rank 4+. The rank still changes magic evasion as in retail.
 local resistRankDamageRate =
 {
-    [-3] = 1.5,
-    [-2] = 1.25,
+    [-3] = 1.3,
+    [-2] = 1.15,
     [-1] = 1,
     [ 0] = 1,
     [ 1] = 1,

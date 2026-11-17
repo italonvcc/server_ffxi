@@ -23,7 +23,10 @@ namespace bots
 enum class Act : uint8
 {
     Heal,   // Smart Heal: the Cure that fits what somebody is missing
+    Cleanse, // The -na spell or Erase for an ailment of kCleanses a party member has
+    Song,    // The songs a player asked for (!ma), sung again when they wear off
     Buff,   // Smart Buff: the first buff of kBuffs somebody lacks
+    Shadows, // Utsusemi on itself when it has no shadows left and holds the tool, not in town
     Debuff, // Smart Debuff: the first debuff of kDebuffs the enemy lacks
     Nuke,   // Smart Spell: the elemental spell that hurts the enemy most
     Provoke,    // Provoke, when the enemy is attacking somebody who is not a tank
@@ -57,6 +60,7 @@ struct Role
 
 inline constexpr std::array kWhiteMageRules{
     Rule{ Act::Heal },
+    Rule{ Act::Cleanse },
     Rule{ Act::Buff },
     Rule{ Act::Debuff },
     Rule{ Act::Skillchain },
@@ -67,6 +71,7 @@ inline constexpr std::array kWhiteMageRules{
 // Fights in melee. Under half its MP it keeps what is left for cures and debuffs.
 inline constexpr std::array kRedMageRules{
     Rule{ Act::Heal },
+    Rule{ Act::Cleanse },
     Rule{ Act::Buff, 99, 50 },
     Rule{ Act::Debuff },
     Rule{ Act::Nuke, 99, 50 },
@@ -78,6 +83,7 @@ inline constexpr std::array kRedMageRules{
 // Not asked for, but a Black Mage should not melee either: debuffs and nukes from range.
 inline constexpr std::array kBlackMageRules{
     Rule{ Act::Heal },
+    Rule{ Act::Cleanse },
     Rule{ Act::Debuff },
     Rule{ Act::Nuke },
     Rule{ Act::Skillchain },
@@ -88,6 +94,7 @@ inline constexpr std::array kBlackMageRules{
 // Shoots from a distance; out of ammo, it falls through to Melee.
 inline constexpr std::array kRangerRules{
     Rule{ Act::Heal },
+    Rule{ Act::Cleanse },
     Rule{ Act::Skillchain },
     Rule{ Act::Shoot },
     Rule{ Act::Melee },
@@ -96,6 +103,7 @@ inline constexpr std::array kRangerRules{
 
 inline constexpr std::array kThiefRules{
     Rule{ Act::Heal },
+    Rule{ Act::Cleanse },
     Rule{ Act::Steal },
     Rule{ Act::Skillchain },
     Rule{ Act::Melee },
@@ -105,7 +113,33 @@ inline constexpr std::array kThiefRules{
 // Every other job: fights next to the leader, and cures if it happens to know a Cure.
 inline constexpr std::array kFighterRules{
     Rule{ Act::Heal },
+    Rule{ Act::Cleanse },
     Rule{ Act::Provoke },
+    Rule{ Act::Skillchain },
+    Rule{ Act::Melee },
+    Rule{ Act::Rest },
+};
+
+// A fighter that keeps Utsusemi up. Any other ninjutsu is cast on request (!ma).
+inline constexpr std::array kNinjaRules{
+    Rule{ Act::Heal },
+    Rule{ Act::Cleanse },
+    Rule{ Act::Shadows },
+    Rule{ Act::Provoke },
+    Rule{ Act::Skillchain },
+    Rule{ Act::Melee },
+    Rule{ Act::Rest },
+};
+
+// Sings what it is asked for, and otherwise plays its subjob: cures, status removal and
+// buffs with a White Mage or Red Mage subjob. Fights in melee like any other job, which
+// also keeps it where its songs reach the fighters.
+inline constexpr std::array kBardRules{
+    Rule{ Act::Heal },
+    Rule{ Act::Cleanse },
+    Rule{ Act::Song },
+    Rule{ Act::Buff },
+    Rule{ Act::Debuff },
     Rule{ Act::Skillchain },
     Rule{ Act::Melee },
     Rule{ Act::Rest },
@@ -114,8 +148,10 @@ inline constexpr std::array kFighterRules{
 inline constexpr Role kWhiteMage{ kWhiteMageRules, 2, 1, true };
 inline constexpr Role kRedMage{ kRedMageRules, 1, 2, true };
 inline constexpr Role kBlackMage{ kBlackMageRules, 0, 0, true };
+inline constexpr Role kBard{ kBardRules, 1, 1, false };
 inline constexpr Role kRanger{ kRangerRules, 0, 0, false };
 inline constexpr Role kThief{ kThiefRules, 0, 0, false };
+inline constexpr Role kNinja{ kNinjaRules, 0, 0, false };
 inline constexpr Role kFighter{ kFighterRules, 0, 0, false };
 
 inline auto roleFor(const xi::Job job) -> const Role&
@@ -128,10 +164,14 @@ inline auto roleFor(const xi::Job job) -> const Role&
             return kRedMage;
         case xi::Job::BLM:
             return kBlackMage;
+        case xi::Job::BRD:
+            return kBard;
         case xi::Job::RNG:
             return kRanger;
         case xi::Job::THF:
             return kThief;
+        case xi::Job::NIN:
+            return kNinja;
         default:
             return kFighter;
     }
@@ -144,8 +184,8 @@ inline auto isTank(const xi::Job job) -> bool
 }
 
 //
-// Jobs a bot can be created as: the six starting jobs, and the advanced jobs below, which
-// xi.player.charCreate has no starting gear for.
+// Jobs a bot can be created as: the six starting jobs, and the advanced jobs below (BRD,
+// RNG, SAM, NIN), which xi.player.charCreate has no starting gear for.
 //
 
 struct StarterItem
@@ -156,6 +196,8 @@ struct StarterItem
 };
 
 inline constexpr std::array kStarterGear{
+    StarterItem{ xi::Job::BRD, 17353, 1 },  // Maple Harp: with an instrument a second song stays on
+    StarterItem{ xi::Job::BRD, 16465, 1 },  // Bronze Knife
     StarterItem{ xi::Job::RNG, 17152, 1 },  // Shortbow
     StarterItem{ xi::Job::RNG, 17318, 99 }, // Wooden Arrow
     StarterItem{ xi::Job::RNG, 16640, 1 },  // Bronze Axe
@@ -180,7 +222,7 @@ inline constexpr std::array kFirstJobGear{
 // Whether a bot can have this job, as main job or subjob
 inline auto isBotJob(const uint8 job) -> bool
 {
-    return (job >= 1 && job <= 6) || (job >= 11 && job <= 13);
+    return (job >= 1 && job <= 6) || (job >= 10 && job <= 13);
 }
 
 // char_jobs column of an advanced job a bot can start as, nullptr for any other job
@@ -188,6 +230,8 @@ inline auto advancedJobColumn(const uint8 job) -> const char*
 {
     switch (static_cast<xi::Job>(job))
     {
+        case xi::Job::BRD:
+            return "brd";
         case xi::Job::RNG:
             return "rng";
         case xi::Job::SAM:
@@ -267,6 +311,81 @@ inline constexpr std::array kDebuffs{
 };
 
 constexpr uint16 kDispel = 260;
+
+// Status removal: the spell and the ailments it takes off a party member. In priority order.
+struct CleanseLine
+{
+    uint16                          spell;
+    std::array<xi::StatusEffect, 3> effects; // None: unused
+};
+
+inline constexpr std::array kCleanses{
+    CleanseLine{ 20, { xi::StatusEffect::Doom, xi::StatusEffect::None, xi::StatusEffect::None } },                // Cursna
+    CleanseLine{ 18, { xi::StatusEffect::Petrification, xi::StatusEffect::None, xi::StatusEffect::None } },       // Stona
+    CleanseLine{ 17, { xi::StatusEffect::Silence, xi::StatusEffect::None, xi::StatusEffect::None } },             // Silena
+    CleanseLine{ 15, { xi::StatusEffect::Paralysis, xi::StatusEffect::None, xi::StatusEffect::None } },           // Paralyna
+    CleanseLine{ 20, { xi::StatusEffect::CurseI, xi::StatusEffect::CurseIi, xi::StatusEffect::Bane } },           // Cursna
+    CleanseLine{ 14, { xi::StatusEffect::Poison, xi::StatusEffect::None, xi::StatusEffect::None } },              // Poisona
+    CleanseLine{ 16, { xi::StatusEffect::Blindness, xi::StatusEffect::None, xi::StatusEffect::None } },           // Blindna
+    CleanseLine{ 19, { xi::StatusEffect::Disease, xi::StatusEffect::Plague, xi::StatusEffect::None } },           // Viruna
+};
+
+// Erase goes last: anything erasable (Slow, Bind, Dia, Bio, stat downs...) the lines above
+// don't cover
+constexpr uint16 kErase = 143;
+
+// Utsusemi, best first: Ni, Ichi. Ninjutsu costs a ninja tool (Shihei), not MP.
+inline constexpr std::array<uint16, 2> kShadows{ 339, 338 };
+
+// Bard songs (spell ids of the Singing skill)
+constexpr uint16 kFirstSong = 368;
+constexpr uint16 kLastSong  = 471;
+
+// The effect a song leaves on the party, None for a song sung at an enemy (Requiem,
+// Lullaby, Elegy, Threnody, Finale...). A bot keeps up the party songs it was asked for.
+// Songs of one effect (the Etudes, the Carols, the tiers of a song) count as the same song.
+inline auto songEffect(const uint16 spellId) -> xi::StatusEffect
+{
+    struct Family
+    {
+        uint16           first, last;
+        xi::StatusEffect effect;
+    };
+
+    static constexpr std::array families{
+        Family{ 378, 385, xi::StatusEffect::Paeon },
+        Family{ 386, 388, xi::StatusEffect::Ballad },
+        Family{ 389, 393, xi::StatusEffect::Minne },
+        Family{ 394, 398, xi::StatusEffect::Minuet },
+        Family{ 399, 400, xi::StatusEffect::Madrigal },
+        Family{ 401, 402, xi::StatusEffect::Prelude },
+        Family{ 403, 404, xi::StatusEffect::Mambo },
+        Family{ 405, 405, xi::StatusEffect::Aubade },
+        Family{ 406, 406, xi::StatusEffect::Pastoral },
+        Family{ 408, 408, xi::StatusEffect::Fantasia },
+        Family{ 409, 411, xi::StatusEffect::Operetta },
+        Family{ 412, 412, xi::StatusEffect::Capriccio },
+        Family{ 414, 414, xi::StatusEffect::Round },
+        Family{ 415, 415, xi::StatusEffect::Gavotte },
+        Family{ 419, 420, xi::StatusEffect::March },
+        Family{ 424, 437, xi::StatusEffect::Etude },
+        Family{ 438, 453, xi::StatusEffect::Carol },
+        Family{ 464, 464, xi::StatusEffect::Hymnus },
+        Family{ 465, 465, xi::StatusEffect::Mazurka },
+        Family{ 467, 467, xi::StatusEffect::Mazurka },
+        Family{ 470, 470, xi::StatusEffect::Scherzo },
+    };
+
+    for (const auto& family : families)
+    {
+        if (spellId >= family.first && spellId <= family.last)
+        {
+            return family.effect;
+        }
+    }
+
+    return xi::StatusEffect::None;
+}
 
 // Elemental spells: Fire, Blizzard, Aero, Stone, Thunder, Water, tiers I-V each
 constexpr uint16 kFirstNuke = 144;

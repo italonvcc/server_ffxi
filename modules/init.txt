@@ -51,3 +51,4 @@ custom/lua/home_command.lua
 custom/lua/resist_command.lua
 custom/lua/out_of_combat_regen.lua
 custom/lua/custom_spells.lua
+custom/lua/enspell_element_strikes.lua

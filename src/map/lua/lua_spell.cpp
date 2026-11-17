@@ -132,6 +132,18 @@ void CLuaSpell::setCastTime(uint32 casttime)
     m_PLuaSpell->setCastTime(std::chrono::milliseconds(casttime));
 }
 
+// CUSTOM (server_ffxi): read and change a spell's base recast, in milliseconds
+// (modules/custom/lua/custom_spells.lua, custom.HASTE_PROTECT_RECAST)
+auto CLuaSpell::getRecastTime() -> uint32
+{
+    return static_cast<uint32>(timer::count_milliseconds(m_PLuaSpell->getRecastTime()));
+}
+
+void CLuaSpell::setRecastTime(uint32 recastTime)
+{
+    m_PLuaSpell->setRecastTime(std::chrono::milliseconds(recastTime));
+}
+
 auto CLuaSpell::getPrimaryTargetID() -> uint32
 {
     return m_PLuaSpell->getPrimaryTargetID();
@@ -248,6 +260,7 @@ void CLuaSpell::Register()
     SOL_REGISTER("setJobLevel", CLuaSpell::setJobLevel);
     SOL_REGISTER("setAnimation", CLuaSpell::setAnimation);
     SOL_REGISTER("setCastTime", CLuaSpell::setCastTime);
+    SOL_REGISTER("setRecastTime", CLuaSpell::setRecastTime);
     SOL_REGISTER("setMPCost", CLuaSpell::setMPCost);
     SOL_REGISTER("isAoE", CLuaSpell::isAoE);
     SOL_REGISTER("getAoE", CLuaSpell::getAoE);
@@ -268,6 +281,7 @@ void CLuaSpell::Register()
     SOL_REGISTER("getFlag", CLuaSpell::getFlag);
     SOL_REGISTER("getLevel", CLuaSpell::getLevel);
     SOL_REGISTER("getCastTime", CLuaSpell::getCastTime);
+    SOL_REGISTER("getRecastTime", CLuaSpell::getRecastTime);
     SOL_REGISTER("getPrimaryTargetID", CLuaSpell::getPrimaryTargetID);
     SOL_REGISTER("getKnockback", CLuaSpell::getKnockback);
     SOL_REGISTER("isCritical", CLuaSpell::isCritical);
